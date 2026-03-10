@@ -84,6 +84,50 @@
         result
     )
 
+
+    -- Walk up to top-most parent so grouped objects are handled as full hierarchies
+    fn getTopParentNode n =
+    (
+        local current = n
+        while (current != undefined and current.parent != undefined) do current = current.parent
+        current
+    )
+
+    fn appendNodeUnique nodeArr n =
+    (
+        if n != undefined and (findItem nodeArr n) == 0 do append nodeArr n
+        nodeArr
+    )
+
+    fn collectDescendantsRecursive n resultArr =
+    (
+        appendNodeUnique resultArr n
+        for c in n.children do collectDescendantsRecursive c resultArr
+        resultArr
+    )
+
+    -- For each matched callout node, include full hierarchy (top parent + all descendants)
+    fn expandMatchesToFullHierarchy matchedNodes =
+    (
+        local expanded = #()
+        local topParents = #()
+
+        for n in matchedNodes do
+        (
+            local topN = getTopParentNode n
+            appendNodeUnique topParents topN
+        )
+
+        for pNode in topParents do collectDescendantsRecursive pNode expanded
+        expanded
+    )
+
+    fn findHierarchyNodesByNameContains substring =
+    (
+        local directMatches = findNodesByNameContains substring
+        expandMatchesToFullHierarchy directMatches
+    )
+
     fn loadTempLibraryOrThrow libPath label =
     (
         if libPath == undefined or libPath == "" do throw (label + " path is empty.")
@@ -120,8 +164,17 @@
             return false
         )
 
-        for n in nodeArr do n.material = matToAssign
-        format "[INFO] Assigned '%' to % object(s) in category '%'.\n" matToAssign.name nodeArr.count categoryName
+        local assignedCount = 0
+        for n in nodeArr do
+        (
+            if isProperty n #material then
+            (
+                n.material = matToAssign
+                assignedCount += 1
+            )
+        )
+
+        format "[INFO] Assigned '%' to % object(s) in category '%' (hierarchy nodes scanned: %).\n" matToAssign.name assignedCount categoryName nodeArr.count
         true
     )
 
@@ -196,11 +249,11 @@
             return #(0,1,0) -- #(saved, failed, skipped)
         )
 
-        local sinkNodes = findNodesByNameContains "PK2"
-        local drainNodes = findNodesByNameContains "QBS"
-        local colanderNodes = findNodesByNameContains "COL"
-        local dryingRackNodes = findNodesByNameContains "DR"
-        local cuttingBoardNodes = findNodesByNameContains "CB"
+        local sinkNodes = findHierarchyNodesByNameContains "PK2"
+        local drainNodes = findHierarchyNodesByNameContains "QBS"
+        local colanderNodes = findHierarchyNodesByNameContains "COL"
+        local dryingRackNodes = findHierarchyNodesByNameContains "DR"
+        local cuttingBoardNodes = findHierarchyNodesByNameContains "CB"
 
         if sinkNodes.count == 0 then
         (
