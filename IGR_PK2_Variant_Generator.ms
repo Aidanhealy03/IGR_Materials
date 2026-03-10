@@ -38,8 +38,8 @@
         #("WHITE",    "_WH", "White_Quartz",       "White",    "bamboo"),
         #("BLACK",    "_BL", "Black_Quartz",       "Black",    "accacia cutting board #3#1"),
         #("CONCRETE", "_CN", "Concrete_Quartz_02", "Concrete", "bamboo"),
-        #("BROWN",    "_BR", "Brown_Quartz_02",    "Brown",    "acacia cutting board #3#1"),
-        #("GREY",     "_GR", "Grey_Quartz_02",     "Grey",     "acacia cutting board #3#1"),
+        #("BROWN",    "_BR", "Brown_Quartz_02",    "Brown",    "accacia cutting board #3#1"),
+        #("GREY",     "_GR", "Grey_Quartz_02",     "Grey",     "accacia cutting board #3#1"),
         #("BISQUE",   "_BI", "Bisque_Quartz_02",   "Bisque",   "bamboo")
     )
 
