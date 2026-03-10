@@ -85,14 +85,6 @@
     )
 
 
-    -- Walk up to top-most parent so grouped objects are handled as full hierarchies
-    fn getTopParentNode n =
-    (
-        local current = n
-        while (current != undefined and current.parent != undefined) do current = current.parent
-        current
-    )
-
     fn appendNodeUnique nodeArr n =
     (
         if n != undefined and (findItem nodeArr n) == 0 do append nodeArr n
@@ -106,26 +98,28 @@
         resultArr
     )
 
-    -- For each matched callout node, include full hierarchy (top parent + all descendants)
-    fn expandMatchesToFullHierarchy matchedNodes =
+    -- For each matched callout node, include that node + all children in its group hierarchy
+    fn expandMatchesToHierarchyChildren matchedNodes =
     (
         local expanded = #()
-        local topParents = #()
-
-        for n in matchedNodes do
-        (
-            local topN = getTopParentNode n
-            appendNodeUnique topParents topN
-        )
-
-        for pNode in topParents do collectDescendantsRecursive pNode expanded
+        for n in matchedNodes do collectDescendantsRecursive n expanded
         expanded
     )
 
     fn findHierarchyNodesByNameContains substring =
     (
         local directMatches = findNodesByNameContains substring
-        expandMatchesToFullHierarchy directMatches
+        expandMatchesToHierarchyChildren directMatches
+    )
+
+    fn removeNodesByReference sourceArr removeArr =
+    (
+        local out = #()
+        for n in sourceArr do
+        (
+            if (findItem removeArr n) == 0 do append out n
+        )
+        out
     )
 
     fn loadTempLibraryOrThrow libPath label =
@@ -255,6 +249,11 @@
         local dryingRackNodes = findHierarchyNodesByNameContains "DR"
         local cuttingBoardNodes = findHierarchyNodesByNameContains "CB"
 
+        -- Prevent cross-category overwrites when hierarchies overlap
+        local quartzTargets = sinkNodes + drainNodes
+        local accessoryTargets = colanderNodes + dryingRackNodes + drainNodes
+        cuttingBoardNodes = removeNodesByReference cuttingBoardNodes (quartzTargets + accessoryTargets)
+
         if sinkNodes.count == 0 then
         (
             format "[ERROR] No sink objects found (contains 'PK2'). Scene skipped: %\n" sourceFile
@@ -264,7 +263,7 @@
         if colanderNodes.count == 0 do format "[WARN] No COL objects found in scene.\n"
         if dryingRackNodes.count == 0 do format "[WARN] No DR objects found in scene.\n"
         if cuttingBoardNodes.count == 0 do format "[WARN] No CB objects found in scene.\n"
-        if drainNodes.count > 0 do format "[INFO] QBS drain objects found: % (will receive Quartz material with sink).\n" drainNodes.count
+        if drainNodes.count > 0 do format "[INFO] QBS drain objects found: % (will receive color-matched accessory material).\n" drainNodes.count
 
         local savedCount = 0
         local failedCount = 0
@@ -294,7 +293,7 @@
                 )
 
                 assignMaterialToNodes sinkNodes sinkMat "Sink (PK2)"
-                if drainNodes.count > 0 do assignMaterialToNodes drainNodes sinkMat "Drain (QBS)"
+                if drainNodes.count > 0 do assignMaterialToNodes drainNodes accessoryMat "Drain (QBS)"
                 if colanderNodes.count > 0 do assignMaterialToNodes colanderNodes accessoryMat "Colander (COL)"
                 if dryingRackNodes.count > 0 do assignMaterialToNodes dryingRackNodes accessoryMat "Drying Rack (DR)"
                 if cuttingBoardNodes.count > 0 do assignMaterialToNodes cuttingBoardNodes cbMat "Cutting Board (CB)"
