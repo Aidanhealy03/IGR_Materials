@@ -30,6 +30,10 @@
     global IGR_UseOutputRoot = false
     global IGR_OutputRoot = ""
 
+    -- Source parent folder to scan recursively for .max files
+    -- Set to "" to prompt instead.
+    global IGR_SourceRoot = @"C:\Users\AHealy\Desktop\PK2's IGR"
+
     /* ============================
        Build definitions
        ============================ */
@@ -243,8 +247,13 @@
        ============================ */
     format "\n=== IGR PK2 Variant Generator (Batch) Started ===\n"
 
-    local sourceRoot = getSavePath caption:"Select SOURCE folder (script will scan subfolders for .max files)"
-    if sourceRoot == undefined do throw "User canceled source folder selection."
+    local sourceRoot = IGR_SourceRoot
+    if sourceRoot == undefined or sourceRoot == "" then
+    (
+        sourceRoot = getSavePath caption:"Select SOURCE folder (script will scan subfolders for .max files)"
+        if sourceRoot == undefined do throw "User canceled source folder selection."
+    )
+
     sourceRoot = ensureTrailingBackslash sourceRoot
 
     local outputRoot = ""
