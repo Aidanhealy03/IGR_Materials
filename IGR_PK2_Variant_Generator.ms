@@ -137,6 +137,28 @@
         (matchPattern upperName pattern:"*_BI")
     )
 
+
+    -- Reliable recursive file collection (avoids ** glob compatibility issues)
+    fn collectMaxFilesRecursive rootFolder =
+    (
+        local pendingDirs = #(ensureTrailingBackslash rootFolder)
+        local results = #()
+
+        while pendingDirs.count > 0 do
+        (
+            local currentDir = pendingDirs[pendingDirs.count]
+            deleteItem pendingDirs pendingDirs.count
+
+            local currentFiles = getFiles (currentDir + "*.max")
+            for f in currentFiles do append results f
+
+            local childDirs = getDirectories (currentDir + "*")
+            for d in childDirs do append pendingDirs (ensureTrailingBackslash d)
+        )
+
+        results
+    )
+
     fn buildVariantOutputPath sourceFile outputRoot sourceRoot suffix =
     (
         local sourceDir = getFilenamePath sourceFile
@@ -280,7 +302,7 @@
     format "[INFO] Accessory library: %\n" IGR_AccessoryLibPath
     format "[INFO] Cutting board library: %\n" IGR_CuttingBoardLibPath
 
-    local allMaxFiles = getFiles (sourceRoot + "**\\*.max")
+    local allMaxFiles = collectMaxFilesRecursive sourceRoot
     local sourceFiles = #()
 
     for f in allMaxFiles do
