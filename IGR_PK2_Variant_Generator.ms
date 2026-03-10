@@ -332,6 +332,32 @@
         setFirstExistingProperty v #(#priority,#jobPriority) priority
     )
 
+
+    fn prepareBackburnerSilentSession managerIP priority =
+    (
+        local ok = true
+
+        -- Set as many known network-render properties as possible without UI.
+        try (if isProperty netrender #manager do netrender.manager = managerIP) catch(ok = false)
+        try (if isProperty netrender #managername do netrender.managername = managerIP) catch(ok = false)
+        try (if isProperty netrender #priority do netrender.priority = priority) catch()
+        try (if isProperty netrender #jobPriority do netrender.jobPriority = priority) catch()
+
+        -- Common dialog-suppression/autoconnect flags (availability varies by Max version).
+        try (if isProperty netrender #autoConnect do netrender.autoConnect = true) catch()
+        try (if isProperty netrender #connectAutomatically do netrender.connectAutomatically = true) catch()
+        try (if isProperty netrender #showDialog do netrender.showDialog = false) catch()
+        try (if isProperty netrender #showJobAssignment do netrender.showJobAssignment = false) catch()
+        try (if isProperty netrender #useJobAssignmentDialog do netrender.useJobAssignmentDialog = false) catch()
+        try (if isProperty netrender #skipOutputTest do netrender.skipOutputTest = true) catch()
+        try (if isProperty netrender #silentMode do netrender.silentMode = true) catch()
+
+        -- Best-effort explicit manager connection before submission.
+        try (netrender.connect managerIP) catch()
+
+        ok
+    )
+
     fn restoreSceneStateByName stName =
     (
         local ok = false
@@ -443,9 +469,8 @@
         setBackburnerTaskInfo view1 task1 IGR_BackburnerManager IGR_BackburnerPriority
         setBackburnerTaskInfo view2 task2 IGR_BackburnerManager IGR_BackburnerPriority
 
-        -- Global backburner settings best-effort
-        try (if isProperty netrender #manager then netrender.manager = IGR_BackburnerManager) catch()
-        try (if isProperty netrender #managername then netrender.managername = IGR_BackburnerManager) catch()
+        -- Global backburner settings best-effort (silences assignment dialogs where supported)
+        prepareBackburnerSilentSession IGR_BackburnerManager IGR_BackburnerPriority
 
         format "[INFO] View01 output: %\n" out1
         format "[INFO] View02 output: %\n" out2
@@ -455,8 +480,10 @@
         try (batchRenderMgr.netRender = true) catch()
         try (batchRenderMgr.render()) catch (submitOK = false)
 
-        if submitOK then format "[SUCCESS] Batch render submitted to Backburner.\n"
-        else format "[ERROR] Failed to submit batch render to Backburner.\n"
+        if submitOK then
+            format "[SUCCESS] Batch render submitted to Backburner without manual assignment (if supported by this Max/Backburner build).\n"
+        else
+            format "[ERROR] Failed to submit batch render to Backburner.\n"
 
         submitOK
     )
