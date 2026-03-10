@@ -31,6 +31,9 @@
     global IGR_BackburnerPriority = 50
     global IGR_RenderExt = ".jpg"
 
+    -- Render destination search root (recursive)
+    global IGR_RenderDestinationRoot = @"V:\KCL_144_FDA_Quartz Workstation PK2s\Deliverables\IGR"
+
     -- Preset batch view names and required camera/state
     global IGR_View01Name = "View01"
     global IGR_View02Name = "View02"
@@ -209,6 +212,55 @@
         )
 
         results
+    )
+
+
+    fn collectDirectoriesRecursive rootFolder =
+    (
+        local pendingDirs = #(ensureTrailingBackslash rootFolder)
+        local results = #()
+
+        while pendingDirs.count > 0 do
+        (
+            local currentDir = pendingDirs[pendingDirs.count]
+            deleteItem pendingDirs pendingDirs.count
+
+            local childDirs = getDirectories (currentDir + "*")
+            for d in childDirs do
+            (
+                append results d
+                append pendingDirs (ensureTrailingBackslash d)
+            )
+        )
+
+        results
+    )
+
+    -- QTWS-875-PK2_BL -> QTWS-875-PK2BL
+    fn buildDeliveryFolderToken variantScenePath =
+    (
+        local baseName = getFilenameFile variantScenePath
+        if baseName.count > 3 and (substring baseName (baseName.count - 2) 1) == "_" then
+        (
+            local left = substring baseName 1 (baseName.count - 3)
+            local right = substring baseName (baseName.count - 1) 2
+            left + right
+        )
+        else baseName
+    )
+
+    fn findFirstMatchingDeliveryFolder variantScenePath =
+    (
+        if IGR_RenderDestinationRoot == undefined or IGR_RenderDestinationRoot == "" then return undefined
+
+        local targetToken = lowerSafe (buildDeliveryFolderToken variantScenePath)
+        local dirs = collectDirectoriesRecursive IGR_RenderDestinationRoot
+
+        for d in dirs do
+        (
+            if (lowerSafe (filenameFromPath d)) == targetToken do return (ensureTrailingBackslash d)
+        )
+        undefined
     )
 
     fn buildVariantOutputPath sourceFile outputRoot sourceRoot suffix =
@@ -405,13 +457,26 @@
     fn getOrBuildOutputForView viewObj fallbackVariantPath viewName suffix sourceRoot =
     (
         local currentOut = getFirstExistingProperty viewObj #(#outputFilename,#outputFile,#fileName,#filename)
-        if currentOut == undefined or currentOut == "" then
+        local targetFolder = findFirstMatchingDeliveryFolder fallbackVariantPath
+
+        local baseNameNoSuffix = undefined
+        if currentOut != undefined and currentOut != "" then baseNameNoSuffix = getFilenameFile currentOut
+        if baseNameNoSuffix == undefined or baseNameNoSuffix == "" then baseNameNoSuffix = getFilenameFile fallbackVariantPath
+
+        -- No explicit view suffix injection; keep base naming source, only add finish suffix.
+        local finalFileName = baseNameNoSuffix + suffix + IGR_RenderExt
+
+        if targetFolder != undefined then
+        (
+            targetFolder + finalFileName
+        )
+        else if currentOut == undefined or currentOut == "" then
         (
             buildFallbackRenderPath fallbackVariantPath viewName suffix sourceRoot
         )
         else
         (
-            addSuffixToFilePath currentOut suffix
+            (getFilenamePath currentOut) + finalFileName
         )
     )
 
