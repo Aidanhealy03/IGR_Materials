@@ -47,6 +47,13 @@
     global IGR_TaskNamePrefix = "KCL_144_IGR"
     global IGR_TaskNameMiddle = "_FDA_Quartz-Workstation-PK2s_"
 
+    -- Network Job Assignment automation
+    global IGR_AutoNetworkDialogTitleToken = "Network Job Assignment"
+    global IGR_NetAssignTimer = undefined
+    global IGR_NetAssignDesiredJobName = ""
+    global IGR_NetAssignDesiredPriority = 50
+    global IGR_NetAssignDesiredManager = ""
+
     local buildDefs = #(
         -- #("DisplayName", "Suffix", "SinkQuartzMat", "AccessoryMat", "CuttingBoardMat")
         #("WHITE",    "_WH", "White_Quartz",       "White",    "bamboo"),
@@ -480,6 +487,85 @@
         )
     )
 
+    fn configureNetrenderJobDefaults jobName managerIP priority =
+    (
+        try (if isProperty netrender #jobName do netrender.jobName = jobName) catch()
+        try (if isProperty netrender #jobname do netrender.jobname = jobName) catch()
+        try (if isProperty netrender #priority do netrender.priority = priority) catch()
+        try (if isProperty netrender #jobPriority do netrender.jobPriority = priority) catch()
+        try (if isProperty netrender #manager do netrender.manager = managerIP) catch()
+        try (if isProperty netrender #managername do netrender.managername = managerIP) catch()
+    )
+
+    fn pressFirstMatchingButton parentHwnd captions =
+    (
+        for c in captions do
+        (
+            local ok = false
+            try (ok = UIAccessor.PressButtonByName parentHwnd c) catch(ok = false)
+            if ok then return true
+        )
+        false
+    )
+
+    fn tryAutomateNetworkJobAssignmentDialog =
+    (
+        local didAnything = false
+        local dialogs = #()
+        try (dialogs = UIAccessor.GetPopupDialogs()) catch(dialogs = #())
+
+        for h in dialogs do
+        (
+            local t = ""
+            try (t = UIAccessor.GetWindowText h) catch(t = "")
+            if (findString (lowerSafe t) (lowerSafe IGR_AutoNetworkDialogTitleToken)) != undefined then
+            (
+                didAnything = true
+                configureNetrenderJobDefaults IGR_NetAssignDesiredJobName IGR_NetAssignDesiredManager IGR_NetAssignDesiredPriority
+
+                -- Try direct connect first.
+                try (netrender.connect IGR_NetAssignDesiredManager) catch()
+
+                -- Then push dialog buttons.
+                pressFirstMatchingButton h #("Connect","&Connect")
+                pressFirstMatchingButton h #("Submit","&Submit","Submit to Network")
+            )
+        )
+
+        didAnything
+    )
+
+    fn stopNetworkAssignmentTimer =
+    (
+        try
+        (
+            if IGR_NetAssignTimer != undefined do
+            (
+                IGR_NetAssignTimer.Stop()
+                dotNet.removeAllEventHandlers IGR_NetAssignTimer "Tick"
+                IGR_NetAssignTimer = undefined
+            )
+        ) catch()
+    )
+
+    fn onNetworkAssignmentTimerTick sender args =
+    (
+        try (tryAutomateNetworkJobAssignmentDialog()) catch()
+    )
+
+    fn startNetworkAssignmentTimer jobName managerIP priority =
+    (
+        stopNetworkAssignmentTimer()
+        IGR_NetAssignDesiredJobName = jobName
+        IGR_NetAssignDesiredManager = managerIP
+        IGR_NetAssignDesiredPriority = priority
+
+        IGR_NetAssignTimer = dotNetObject "System.Windows.Forms.Timer"
+        IGR_NetAssignTimer.Interval = 250
+        dotNet.addEventHandler IGR_NetAssignTimer "Tick" onNetworkAssignmentTimerTick
+        IGR_NetAssignTimer.Start()
+    )
+
     fn buildTaskName sceneBase suffix igrIndex =
     (
         IGR_TaskNamePrefix + (igrIndex as string) + IGR_TaskNameMiddle + sceneBase + suffix
@@ -542,11 +628,18 @@
         format "[INFO] Submitting Backburner tasks: '%' and '%'.\n" task1 task2
 
         local submitOK = true
+        local primaryJobName = task1
+
+        configureNetrenderJobDefaults primaryJobName IGR_BackburnerManager IGR_BackburnerPriority
+        startNetworkAssignmentTimer primaryJobName IGR_BackburnerManager IGR_BackburnerPriority
+
         try (batchRenderMgr.netRender = true) catch()
         try (batchRenderMgr.render()) catch (submitOK = false)
 
+        stopNetworkAssignmentTimer()
+
         if submitOK then
-            format "[SUCCESS] Batch render submitted to Backburner without manual assignment (if supported by this Max/Backburner build).\n"
+            format "[SUCCESS] Batch render submitted to Backburner with auto job-assignment handling.\n"
         else
             format "[ERROR] Failed to submit batch render to Backburner.\n"
 
