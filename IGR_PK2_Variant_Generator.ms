@@ -314,13 +314,11 @@
     format "[INFO] Variant save failures: %\n" totalFailed
     format "[INFO] Scene/finish skips: %\n" totalSkipped
 
-    messageBox
-    (
+    messageBox (
         "Batch generation complete.\n\n" +
         "Source scenes processed: " + (sourceFiles.count as string) + "\n" +
         "Variant files saved: " + (totalSaved as string) + "\n" +
         "Variant save failures: " + (totalFailed as string) + "\n" +
         "Scene/finish skips: " + (totalSkipped as string)
-    )
-    title:"IGR PK2 Variant Generator (Batch)"
+    ) title:"IGR PK2 Variant Generator (Batch)"
 )
