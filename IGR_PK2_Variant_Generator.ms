@@ -54,7 +54,7 @@
     global IGR_NetAssignDesiredPriority = 50
     global IGR_NetAssignDesiredManager = ""
 
-    local buildDefs = #(
+    global IGR_buildDefs = #(
         -- #("DisplayName", "Suffix", "SinkQuartzMat", "AccessoryMat", "CuttingBoardMat")
         #("WHITE",    "_WH", "White_Quartz",       "White",    "bamboo"),
         #("BLACK",    "_BL", "Black_Quartz",       "Black",    "acacia IGR"),
@@ -678,7 +678,7 @@
         submitOK
     )
 
-    fn processOneScene sourceFile quartzLib accessoryLib cbLib outputRoot sourceRoot buildDefs =
+    fn processOneScene sourceFile quartzLib accessoryLib cbLib outputRoot sourceRoot =
     (
         format "\n==================================================\n"
         format "[SCENE] Processing: %\n" sourceFile
@@ -719,7 +719,7 @@
 
         with undo off
         (
-            for def in buildDefs do
+            for def in IGR_buildDefs do
             (
                 local finishName = def[1]
                 local suffix = def[2]
@@ -773,81 +773,268 @@
     )
 
     /* ============================
-       Main
+       Runner + UI
        ============================ */
-    format "\n=== IGR PK2 Variant Generator + Batch Render Started ===\n"
 
-    local sourceRoot = IGR_SourceRoot
-    if sourceRoot == undefined or sourceRoot == "" then
+    fn validateCurrentSettings =
     (
-        sourceRoot = getSavePath caption:"Select SOURCE folder (script will scan subfolders for .max files)"
-        if sourceRoot == undefined do throw "User canceled source folder selection."
-    )
-    sourceRoot = ensureTrailingBackslash sourceRoot
+        local issues = #()
 
-    local outputRoot = ""
-    if IGR_UseOutputRoot then
-    (
-        outputRoot = IGR_OutputRoot
-        if outputRoot == "" then outputRoot = getSavePath caption:"Select OUTPUT root folder"
-        if outputRoot == undefined or outputRoot == "" do throw "Output root is required when IGR_UseOutputRoot = true."
-        outputRoot = ensureTrailingBackslash outputRoot
-        ensureFolderExists outputRoot
+        if IGR_SourceRoot == undefined or IGR_SourceRoot == "" do append issues "Source Root is empty."
+        if IGR_QuartzLibPath == undefined or IGR_QuartzLibPath == "" do append issues "Quartz material library path is empty."
+        if IGR_AccessoryLibPath == undefined or IGR_AccessoryLibPath == "" do append issues "Accessory material library path is empty."
+        if IGR_CuttingBoardLibPath == undefined or IGR_CuttingBoardLibPath == "" do append issues "Cutting board material library path is empty."
+        if IGR_RenderDestinationRoot == undefined or IGR_RenderDestinationRoot == "" do append issues "Render destination root is empty."
+        if IGR_BackburnerManager == undefined or IGR_BackburnerManager == "" do append issues "Backburner manager is empty."
+
+        if IGR_buildDefs == undefined or IGR_buildDefs.count == 0 then
+            append issues "No build definitions configured."
+
+        issues
     )
 
-    local quartzLib = loadTempLibraryOrThrow IGR_QuartzLibPath "Quartz"
-    local accessoryLib = loadTempLibraryOrThrow IGR_AccessoryLibPath "Accessory"
-    local cbLib = loadTempLibraryOrThrow IGR_CuttingBoardLibPath "Cutting Board"
-
-    format "[INFO] Source root: %\n" sourceRoot
-    if outputRoot == "" then
-        format "[INFO] Output mode: Save beside source files.\n"
-    else
-        format "[INFO] Output root: %\n" outputRoot
-
-    format "[INFO] Backburner manager: %\n" IGR_BackburnerManager
-    format "[INFO] Backburner priority: %\n" IGR_BackburnerPriority
-    format "[INFO] Render destination root: %\n" IGR_RenderDestinationRoot
-
-    local allMaxFiles = collectMaxFilesRecursive sourceRoot
-    local sourceFiles = #()
-    for f in allMaxFiles where not (isGeneratedVariantSourceFile f) do append sourceFiles f
-
-    if sourceFiles.count == 0 then
+    fn runIGRGenerator dryRun:false =
     (
-        messageBox "No source .max files found in selected folder/subfolders (after excluding generated variants)."
-        throw "No source files to process."
+        local issues = validateCurrentSettings()
+        if issues.count > 0 then
+        (
+            local msg = "Please fix these settings before running:\n\n"
+            for i in issues do msg += ("- " + i + "\n")
+            messageBox msg title:"IGR Generator - Validation"
+            return false
+        )
+
+        format "\n=== IGR PK2 Variant Generator + Batch Render Started ===\n"
+
+        local sourceRoot = ensureTrailingBackslash IGR_SourceRoot
+
+        local outputRoot = ""
+        if IGR_UseOutputRoot then
+        (
+            outputRoot = IGR_OutputRoot
+            if outputRoot == "" then
+            (
+                messageBox "Output Root is required when 'Use Output Root' is enabled."
+                return false
+            )
+            outputRoot = ensureTrailingBackslash outputRoot
+            ensureFolderExists outputRoot
+        )
+
+        local quartzLib = loadTempLibraryOrThrow IGR_QuartzLibPath "Quartz"
+        local accessoryLib = loadTempLibraryOrThrow IGR_AccessoryLibPath "Accessory"
+        local cbLib = loadTempLibraryOrThrow IGR_CuttingBoardLibPath "Cutting Board"
+
+        format "[INFO] Source root: %\n" sourceRoot
+        if outputRoot == "" then
+            format "[INFO] Output mode: Save beside source files.\n"
+        else
+            format "[INFO] Output root: %\n" outputRoot
+
+        format "[INFO] Backburner manager: %\n" IGR_BackburnerManager
+        format "[INFO] Backburner priority: %\n" IGR_BackburnerPriority
+        format "[INFO] Render destination root: %\n" IGR_RenderDestinationRoot
+        format "[INFO] Dry run: %\n" dryRun
+
+        local allMaxFiles = collectMaxFilesRecursive sourceRoot
+        local sourceFiles = #()
+        for f in allMaxFiles where not (isGeneratedVariantSourceFile f) do append sourceFiles f
+
+        if sourceFiles.count == 0 then
+        (
+            messageBox "No source .max files found in selected folder/subfolders (after excluding generated variants)."
+            return false
+        )
+
+        format "[INFO] Source .max files found: %\n" sourceFiles.count
+
+        local totalSaved = 0
+        local totalFailed = 0
+        local totalSkipped = 0
+        local totalSubmitted = 0
+
+        if dryRun then
+        (
+            messageBox ("Dry Run Complete.\n\nSource scenes that would process: " + (sourceFiles.count as string)) title:"IGR Generator Dry Run"
+            return true
+        )
+
+        for src in sourceFiles do
+        (
+            local result = processOneScene src quartzLib accessoryLib cbLib outputRoot sourceRoot
+            totalSaved += result[1]
+            totalFailed += result[2]
+            totalSkipped += result[3]
+            totalSubmitted += result[4]
+        )
+
+        format "\n=== IGR PK2 Variant Generator + Batch Render Completed ===\n"
+        format "[INFO] Source scenes processed: %\n" sourceFiles.count
+        format "[INFO] Variant files saved: %\n" totalSaved
+        format "[INFO] Variant save/render failures: %\n" totalFailed
+        format "[INFO] Scene/finish skips: %\n" totalSkipped
+        format "[INFO] Backburner submissions: %\n" totalSubmitted
+
+        messageBox (
+            "Batch generation/render submission complete.\n\n" +
+            "Source scenes processed: " + (sourceFiles.count as string) + "\n" +
+            "Variant files saved: " + (totalSaved as string) + "\n" +
+            "Variant save/render failures: " + (totalFailed as string) + "\n" +
+            "Scene/finish skips: " + (totalSkipped as string) + "\n" +
+            "Backburner submissions: " + (totalSubmitted as string)
+        ) title:"IGR PK2 Variant Generator + Batch Render"
+
+        true
     )
 
-    format "[INFO] Source .max files found: %\n" sourceFiles.count
-
-    local totalSaved = 0
-    local totalFailed = 0
-    local totalSkipped = 0
-    local totalSubmitted = 0
-
-    for src in sourceFiles do
+    rollout IGR_PK2_Generator_RL "IGR PK2 Variant + Render Generator" width:920 height:900
     (
-        local result = processOneScene src quartzLib accessoryLib cbLib outputRoot sourceRoot buildDefs
-        totalSaved += result[1]
-        totalFailed += result[2]
-        totalSkipped += result[3]
-        totalSubmitted += result[4]
+        groupBox gbPaths "Paths" pos:[8,8] width:904 height:190
+        editText etSource "Source Root" pos:[20,32] width:760 text:IGR_SourceRoot
+        button btSource "..." pos:[790,30] width:30
+        editText etQuartz "Quartz MAT" pos:[20,58] width:760 text:IGR_QuartzLibPath
+        button btQuartz "..." pos:[790,56] width:30
+        editText etAcc "Accessory MAT" pos:[20,84] width:760 text:IGR_AccessoryLibPath
+        button btAcc "..." pos:[790,82] width:30
+        editText etCB "Cuttingboard MAT" pos:[20,110] width:760 text:IGR_CuttingBoardLibPath
+        button btCB "..." pos:[790,108] width:30
+        editText etDest "Render Destination Root" pos:[20,136] width:760 text:IGR_RenderDestinationRoot
+        button btDest "..." pos:[790,134] width:30
+        checkbox chkOut "Use Output Root" pos:[20,162] checked:IGR_UseOutputRoot
+        editText etOut "Output Root" pos:[140,160] width:640 text:IGR_OutputRoot
+        button btOut "..." pos:[790,158] width:30
+
+        groupBox gbRender "Render / Backburner" pos:[8,204] width:904 height:122
+        editText etMgr "Manager" pos:[20,228] width:200 text:IGR_BackburnerManager
+        spinner spPriority "Priority" pos:[240,228] width:120 range:[1,100,IGR_BackburnerPriority]
+        editText etExt "Image Ext" pos:[380,228] width:80 text:IGR_RenderExt
+        checkbox chkAutoDlg "Automate Network Job Assignment Dialog" pos:[480,230] checked:true
+
+        editText etV1 "View01 Name" pos:[20,258] width:120 text:IGR_View01Name
+        editText etV1Cam "View01 Camera" pos:[150,258] width:180 text:IGR_View01CameraName
+        editText etV1State "View01 State" pos:[340,258] width:120 text:IGR_View01State
+        editText etV2 "View02 Name" pos:[470,258] width:120 text:IGR_View02Name
+        editText etV2Cam "View02 Camera" pos:[600,258] width:180 text:IGR_View02CameraName
+        editText etV2State "View02 State" pos:[790,258] width:100 text:IGR_View02State
+
+        editText etTaskPre "Task Prefix" pos:[20,288] width:220 text:IGR_TaskNamePrefix
+        editText etTaskMid "Task Middle" pos:[250,288] width:640 text:IGR_TaskNameMiddle
+
+        groupBox gbBuilds "Build Definitions (Suffix / Sink Quartz / Accessory / Cuttingboard)" pos:[8,332] width:904 height:436
+
+        label l1 "WHITE" pos:[20,356]
+        editText b1s "" pos:[90,352] width:50 text:IGR_buildDefs[1][2]
+        editText b1q "" pos:[150,352] width:210 text:IGR_buildDefs[1][3]
+        editText b1a "" pos:[370,352] width:210 text:IGR_buildDefs[1][4]
+        editText b1c "" pos:[590,352] width:210 text:IGR_buildDefs[1][5]
+
+        label l2 "BLACK" pos:[20,386]
+        editText b2s "" pos:[90,382] width:50 text:IGR_buildDefs[2][2]
+        editText b2q "" pos:[150,382] width:210 text:IGR_buildDefs[2][3]
+        editText b2a "" pos:[370,382] width:210 text:IGR_buildDefs[2][4]
+        editText b2c "" pos:[590,382] width:210 text:IGR_buildDefs[2][5]
+
+        label l3 "CONCRETE" pos:[20,416]
+        editText b3s "" pos:[90,412] width:50 text:IGR_buildDefs[3][2]
+        editText b3q "" pos:[150,412] width:210 text:IGR_buildDefs[3][3]
+        editText b3a "" pos:[370,412] width:210 text:IGR_buildDefs[3][4]
+        editText b3c "" pos:[590,412] width:210 text:IGR_buildDefs[3][5]
+
+        label l4 "BROWN" pos:[20,446]
+        editText b4s "" pos:[90,442] width:50 text:IGR_buildDefs[4][2]
+        editText b4q "" pos:[150,442] width:210 text:IGR_buildDefs[4][3]
+        editText b4a "" pos:[370,442] width:210 text:IGR_buildDefs[4][4]
+        editText b4c "" pos:[590,442] width:210 text:IGR_buildDefs[4][5]
+
+        label l5 "GREY" pos:[20,476]
+        editText b5s "" pos:[90,472] width:50 text:IGR_buildDefs[5][2]
+        editText b5q "" pos:[150,472] width:210 text:IGR_buildDefs[5][3]
+        editText b5a "" pos:[370,472] width:210 text:IGR_buildDefs[5][4]
+        editText b5c "" pos:[590,472] width:210 text:IGR_buildDefs[5][5]
+
+        label l6 "BISQUE" pos:[20,506]
+        editText b6s "" pos:[90,502] width:50 text:IGR_buildDefs[6][2]
+        editText b6q "" pos:[150,502] width:210 text:IGR_buildDefs[6][3]
+        editText b6a "" pos:[370,502] width:210 text:IGR_buildDefs[6][4]
+        editText b6c "" pos:[590,502] width:210 text:IGR_buildDefs[6][5]
+
+        label hlp "Routing: SKU + finish folder match (finish is last 2 chars of folder name)." pos:[20,540]
+        label hlp2 "Network dialog automation attempts Rename/Priority/Connect/Submit automatically." pos:[20,560]
+
+        button btValidate "Validate Settings" pos:[20,790] width:150 height:30
+        button btDry "Dry Run" pos:[180,790] width:120 height:30
+        button btRun "Run Generator + Submit Renders" pos:[310,790] width:270 height:30
+        button btClose "Close" pos:[590,790] width:120 height:30
+
+        fn applyUIToGlobals =
+        (
+            IGR_SourceRoot = etSource.text
+            IGR_QuartzLibPath = etQuartz.text
+            IGR_AccessoryLibPath = etAcc.text
+            IGR_CuttingBoardLibPath = etCB.text
+            IGR_RenderDestinationRoot = etDest.text
+            IGR_UseOutputRoot = chkOut.checked
+            IGR_OutputRoot = etOut.text
+
+            IGR_BackburnerManager = etMgr.text
+            IGR_BackburnerPriority = spPriority.value
+            IGR_RenderExt = etExt.text
+
+            IGR_View01Name = etV1.text
+            IGR_View01CameraName = etV1Cam.text
+            IGR_View01State = etV1State.text
+            IGR_View02Name = etV2.text
+            IGR_View02CameraName = etV2Cam.text
+            IGR_View02State = etV2State.text
+
+            IGR_TaskNamePrefix = etTaskPre.text
+            IGR_TaskNameMiddle = etTaskMid.text
+
+            IGR_buildDefs[1] = #(IGR_buildDefs[1][1], b1s.text, b1q.text, b1a.text, b1c.text)
+            IGR_buildDefs[2] = #(IGR_buildDefs[2][1], b2s.text, b2q.text, b2a.text, b2c.text)
+            IGR_buildDefs[3] = #(IGR_buildDefs[3][1], b3s.text, b3q.text, b3a.text, b3c.text)
+            IGR_buildDefs[4] = #(IGR_buildDefs[4][1], b4s.text, b4q.text, b4a.text, b4c.text)
+            IGR_buildDefs[5] = #(IGR_buildDefs[5][1], b5s.text, b5q.text, b5a.text, b5c.text)
+            IGR_buildDefs[6] = #(IGR_buildDefs[6][1], b6s.text, b6q.text, b6a.text, b6c.text)
+
+            IGR_AutoNetworkDialogTitleToken = if chkAutoDlg.checked then "Network Job Assignment" else "__DISABLED__"
+        )
+
+        on btSource pressed do (local p=getSavePath caption:"Select Source Root" initialDir:IGR_SourceRoot; if p!=undefined do etSource.text=p)
+        on btQuartz pressed do (local p=getOpenFileName caption:"Select Quartz MAT" filename:IGR_QuartzLibPath types:"MAT (*.mat)|*.mat|"; if p!=undefined do etQuartz.text=p)
+        on btAcc pressed do (local p=getOpenFileName caption:"Select Accessory MAT" filename:IGR_AccessoryLibPath types:"MAT (*.mat)|*.mat|"; if p!=undefined do etAcc.text=p)
+        on btCB pressed do (local p=getOpenFileName caption:"Select Cuttingboard MAT" filename:IGR_CuttingBoardLibPath types:"MAT (*.mat)|*.mat|"; if p!=undefined do etCB.text=p)
+        on btDest pressed do (local p=getSavePath caption:"Select Render Destination Root" initialDir:IGR_RenderDestinationRoot; if p!=undefined do etDest.text=p)
+        on btOut pressed do (local p=getSavePath caption:"Select Output Root" initialDir:IGR_OutputRoot; if p!=undefined do etOut.text=p)
+
+        on btValidate pressed do
+        (
+            applyUIToGlobals()
+            local issues = validateCurrentSettings()
+            if issues.count == 0 then messageBox "Validation passed." title:"IGR Generator"
+            else
+            (
+                local msg = "Validation issues:\n\n"
+                for i in issues do msg += ("- " + i + "\n")
+                messageBox msg title:"IGR Generator"
+            )
+        )
+
+        on btDry pressed do
+        (
+            applyUIToGlobals()
+            runIGRGenerator dryRun:true
+        )
+
+        on btRun pressed do
+        (
+            applyUIToGlobals()
+            runIGRGenerator dryRun:false
+        )
+
+        on btClose pressed do destroyDialog IGR_PK2_Generator_RL
     )
 
-    format "\n=== IGR PK2 Variant Generator + Batch Render Completed ===\n"
-    format "[INFO] Source scenes processed: %\n" sourceFiles.count
-    format "[INFO] Variant files saved: %\n" totalSaved
-    format "[INFO] Variant save/render failures: %\n" totalFailed
-    format "[INFO] Scene/finish skips: %\n" totalSkipped
-    format "[INFO] Backburner submissions: %\n" totalSubmitted
-
-    messageBox (
-        "Batch generation/render submission complete.\n\n" +
-        "Source scenes processed: " + (sourceFiles.count as string) + "\n" +
-        "Variant files saved: " + (totalSaved as string) + "\n" +
-        "Variant save/render failures: " + (totalFailed as string) + "\n" +
-        "Scene/finish skips: " + (totalSkipped as string) + "\n" +
-        "Backburner submissions: " + (totalSubmitted as string)
-    ) title:"IGR PK2 Variant Generator + Batch Render"
+    try(destroyDialog IGR_PK2_Generator_RL)catch()
+    createDialog IGR_PK2_Generator_RL style:#(#style_titlebar, #style_sysmenu, #style_minimizebox)
 )
