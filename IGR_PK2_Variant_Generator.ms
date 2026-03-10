@@ -264,7 +264,7 @@
         if colanderNodes.count == 0 do format "[WARN] No COL objects found in scene.\n"
         if dryingRackNodes.count == 0 do format "[WARN] No DR objects found in scene.\n"
         if cuttingBoardNodes.count == 0 do format "[WARN] No CB objects found in scene.\n"
-        if drainNodes.count > 0 do format "[INFO] QBS drain objects found: % (left unchanged).\n" drainNodes.count
+        if drainNodes.count > 0 do format "[INFO] QBS drain objects found: % (will receive Quartz material with sink).\n" drainNodes.count
 
         local savedCount = 0
         local failedCount = 0
@@ -294,6 +294,7 @@
                 )
 
                 assignMaterialToNodes sinkNodes sinkMat "Sink (PK2)"
+                if drainNodes.count > 0 do assignMaterialToNodes drainNodes sinkMat "Drain (QBS)"
                 if colanderNodes.count > 0 do assignMaterialToNodes colanderNodes accessoryMat "Colander (COL)"
                 if dryingRackNodes.count > 0 do assignMaterialToNodes dryingRackNodes accessoryMat "Drying Rack (DR)"
                 if cuttingBoardNodes.count > 0 do assignMaterialToNodes cuttingBoardNodes cbMat "Cutting Board (CB)"
