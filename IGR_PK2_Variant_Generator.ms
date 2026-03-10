@@ -98,11 +98,36 @@
         (removeFileExtension p) + IGR_RenderExt
     )
 
+    fn getFinishCodeFromSuffix suffix =
+    (
+        if suffix != undefined and suffix.count == 3 and (substring suffix 1 1) == "_" then
+            (substring suffix 2 2)
+        else
+            suffix
+    )
+
+    fn normalizeBaseNameForFinish baseName suffix =
+    (
+        local finishCode = getFinishCodeFromSuffix suffix
+        local bn = baseName
+
+        if bn == undefined then bn = ""
+
+        if bn.count >= 3 and (substring bn (bn.count - 2) 1) == "_" then
+        (
+            local existing = substring bn (bn.count - 1) 2
+            if (matchPattern (toUpper existing) pattern:"[A-Z][A-Z]") then
+                return ((substring bn 1 (bn.count - 3)) + "_" + finishCode)
+        )
+
+        bn + "_" + finishCode
+    )
+
     fn addSuffixToFilePath p suffix =
     (
         local pathPart = getFilenamePath p
-        local basePart = getFilenameFile p
-        pathPart + basePart + suffix + IGR_RenderExt
+        local basePart = normalizeBaseNameForFinish (getFilenameFile p) suffix
+        pathPart + basePart + IGR_RenderExt
     )
 
     fn appendNodeUnique nodeArr n =
@@ -242,30 +267,36 @@
 
         results
     )
-
-    -- QTWS-875-PK2_BL -> QTWS-875-PK2BL
-    fn buildDeliveryFolderToken variantScenePath =
+    fn extractSkuFromName baseName =
     (
-        local baseName = getFilenameFile variantScenePath
-        if baseName.count > 3 and (substring baseName (baseName.count - 2) 1) == "_" then
+        local sku = ""
+        local rx = dotNetObject "System.Text.RegularExpressions.Regex" "([A-Za-z]+-[0-9]+)"
+        local m = rx.Match baseName
+        if m.Success then
+            sku = m.Groups.Item[1].Value
+        else
         (
-            local left = substring baseName 1 (baseName.count - 3)
-            local right = substring baseName (baseName.count - 1) 2
-            left + right
+            local parts = filterString baseName "_"
+            if parts.count > 0 then sku = parts[1] else sku = baseName
         )
-        else baseName
+        sku
     )
 
-    fn findFirstMatchingDeliveryFolder variantScenePath =
+    -- Find first folder under delivery root where folder name contains SKU and ends with finish code (no underscore)
+    fn findFirstMatchingDeliveryFolder variantScenePath suffix =
     (
         if IGR_RenderDestinationRoot == undefined or IGR_RenderDestinationRoot == "" then return undefined
 
-        local targetToken = lowerSafe (buildDeliveryFolderToken variantScenePath)
-        local dirs = collectDirectoriesRecursive IGR_RenderDestinationRoot
+        local sceneBase = getFilenameFile variantScenePath
+        local sku = lowerSafe (extractSkuFromName sceneBase)
+        local finishCode = lowerSafe (getFinishCodeFromSuffix suffix)
 
+        local dirs = collectDirectoriesRecursive IGR_RenderDestinationRoot
         for d in dirs do
         (
-            if (lowerSafe (filenameFromPath d)) == targetToken do return (ensureTrailingBackslash d)
+            local dn = lowerSafe (filenameFromPath d)
+            if (findString dn sku) != undefined and dn.count >= 2 and (substring dn (dn.count - 1) 2) == finishCode do
+                return (ensureTrailingBackslash d)
         )
         undefined
     )
@@ -292,7 +323,8 @@
             ensureFolderExists outDir
         )
 
-        pathConfig.appendPath outDir (baseName + suffix + ".max")
+        local sceneBase = normalizeBaseNameForFinish baseName suffix
+        pathConfig.appendPath outDir (sceneBase + ".max")
     )
 
     fn buildFallbackRenderPath variantScenePath viewName suffix sourceRoot =
@@ -464,14 +496,14 @@
     fn getOrBuildOutputForView viewObj fallbackVariantPath viewName suffix sourceRoot =
     (
         local currentOut = getFirstExistingProperty viewObj #(#outputFilename,#outputFile,#fileName,#filename)
-        local targetFolder = findFirstMatchingDeliveryFolder fallbackVariantPath
+        local targetFolder = findFirstMatchingDeliveryFolder fallbackVariantPath suffix
 
         local baseNameNoSuffix = undefined
         if currentOut != undefined and currentOut != "" then baseNameNoSuffix = getFilenameFile currentOut
         if baseNameNoSuffix == undefined or baseNameNoSuffix == "" then baseNameNoSuffix = getFilenameFile fallbackVariantPath
 
         -- No explicit view suffix injection; keep base naming source, only add finish suffix.
-        local finalFileName = baseNameNoSuffix + suffix + IGR_RenderExt
+        local finalFileName = (normalizeBaseNameForFinish baseNameNoSuffix suffix) + IGR_RenderExt
 
         if targetFolder != undefined then
         (
@@ -775,6 +807,7 @@
 
     format "[INFO] Backburner manager: %\n" IGR_BackburnerManager
     format "[INFO] Backburner priority: %\n" IGR_BackburnerPriority
+    format "[INFO] Render destination root: %\n" IGR_RenderDestinationRoot
 
     local allMaxFiles = collectMaxFilesRecursive sourceRoot
     local sourceFiles = #()
