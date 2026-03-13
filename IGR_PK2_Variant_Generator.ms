@@ -5,7 +5,7 @@
       1) Recursively scan source folder for .max scenes
       2) For each source scene, build finish variants by reassigning materials
       3) Save variant scene file
-      4) Update preset Batch Render views (View01 / View02) output paths
+      4) Update preset Batch Render view output path (View03)
       5) Auto-fix view camera + scene state mapping
       6) Auto-sync Corona Slicer cap override on Slice_Sink to current quartz
       7) Submit both views to Backburner (manager: 10.10.0.59)
@@ -37,10 +37,13 @@
     -- Preset batch view names and required camera/state
     global IGR_View01Name = "View01"
     global IGR_View02Name = "View02"
+    global IGR_View03Name = "View03"
     global IGR_View01CameraName = "Corona Camera 001"
     global IGR_View02CameraName = "Corona Camera 002"
+    global IGR_View03CameraName = "Corona Camera 001"
     global IGR_View01State = "Full_Build"
     global IGR_View02State = "slice"
+    global IGR_View03State = "empty"
 
     -- Task naming
     -- Example: KCL_144_IGR1_FDA_Quartz-Workstation-PK2s_QUWS-875-PK2_WH
@@ -498,11 +501,8 @@
         local currentOut = getFirstExistingProperty viewObj #(#outputFilename,#outputFile,#fileName,#filename)
         local targetFolder = findFirstMatchingDeliveryFolder fallbackVariantPath suffix
 
-        local baseNameNoSuffix = undefined
-        if currentOut != undefined and currentOut != "" then baseNameNoSuffix = getFilenameFile currentOut
-        if baseNameNoSuffix == undefined or baseNameNoSuffix == "" then baseNameNoSuffix = getFilenameFile fallbackVariantPath
-
-        -- No explicit view suffix injection; keep base naming source, only add finish suffix.
+        -- Always key output filename from variant scene name so material ID/suffix is always correct.
+        local baseNameNoSuffix = getFilenameFile fallbackVariantPath
         local finalFileName = (normalizeBaseNameForFinish baseNameNoSuffix suffix) + IGR_RenderExt
 
         if targetFolder != undefined then
@@ -613,54 +613,36 @@
             return false
         )
 
-        local view1 = getBatchViewByName IGR_View01Name
-        local view2 = getBatchViewByName IGR_View02Name
+        -- Only View03 is submitted per latest production requirement.
+        local view3 = getBatchViewByName IGR_View03Name
+        if view3 == undefined then
+        (
+            format "[ERROR] Batch view '%' not found.\n" IGR_View03Name
+            return false
+        )
 
-        if view1 == undefined then (format "[ERROR] Batch view '%' not found.\n" IGR_View01Name; ok = false)
-        if view2 == undefined then (format "[ERROR] Batch view '%' not found.\n" IGR_View02Name; ok = false)
-        if not ok then return false
+        local cam3 = getNodeByExactName IGR_View03CameraName
+        if cam3 == undefined then format "[WARN] Camera '%' not found.\n" IGR_View03CameraName
 
-        local cam1 = getNodeByExactName IGR_View01CameraName
-        local cam2 = getNodeByExactName IGR_View02CameraName
+        setBatchViewCameraAndState view3 cam3 IGR_View03State
+        if not (restoreSceneStateByName IGR_View03State) do format "[WARN] Could not restore scene state '%'.\n" IGR_View03State
 
-        if cam1 == undefined then format "[WARN] Camera '%' not found.\n" IGR_View01CameraName
-        if cam2 == undefined then format "[WARN] Camera '%' not found.\n" IGR_View02CameraName
-
-        setBatchViewCameraAndState view1 cam1 IGR_View01State
-        setBatchViewCameraAndState view2 cam2 IGR_View02State
-
-        -- Also restore scene states now to ensure any dependent render state is valid.
-        if not (restoreSceneStateByName IGR_View01State) do format "[WARN] Could not restore scene state '%'.\n" IGR_View01State
-        if not (restoreSceneStateByName IGR_View02State) do format "[WARN] Could not restore scene state '%'.\n" IGR_View02State
-
-        local out1 = getOrBuildOutputForView view1 variantScenePath IGR_View01Name suffix sourceRoot
-        local out2 = getOrBuildOutputForView view2 variantScenePath IGR_View02Name suffix sourceRoot
-
-        out1 = forceJpgOutputPath out1
-        out2 = forceJpgOutputPath out2
-
-        ensureFolderExists (getFilenamePath out1)
-        ensureFolderExists (getFilenamePath out2)
-
-        setBatchViewOutput view1 out1
-        setBatchViewOutput view2 out2
+        local out3 = getOrBuildOutputForView view3 variantScenePath IGR_View03Name suffix sourceRoot
+        out3 = forceJpgOutputPath out3
+        ensureFolderExists (getFilenamePath out3)
+        setBatchViewOutput view3 out3
 
         local sceneBase = getFilenameFile variantScenePath
-        local task1 = buildTaskName sceneBase "" 1
-        local task2 = buildTaskName sceneBase "" 2
+        local task3 = buildTaskName sceneBase "" 3
+        setBackburnerTaskInfo view3 task3 IGR_BackburnerManager IGR_BackburnerPriority
 
-        setBackburnerTaskInfo view1 task1 IGR_BackburnerManager IGR_BackburnerPriority
-        setBackburnerTaskInfo view2 task2 IGR_BackburnerManager IGR_BackburnerPriority
-
-        -- Global backburner settings best-effort (silences assignment dialogs where supported)
         prepareBackburnerSilentSession IGR_BackburnerManager IGR_BackburnerPriority
 
-        format "[INFO] View01 output: %\n" out1
-        format "[INFO] View02 output: %\n" out2
-        format "[INFO] Submitting Backburner tasks: '%' and '%'.\n" task1 task2
+        format "[INFO] View03 output: %\n" out3
+        format "[INFO] Submitting Backburner task: '%'.\n" task3
 
         local submitOK = true
-        local primaryJobName = task1
+        local primaryJobName = task3
 
         configureNetrenderJobDefaults primaryJobName IGR_BackburnerManager IGR_BackburnerPriority
         startNetworkAssignmentTimer primaryJobName IGR_BackburnerManager IGR_BackburnerPriority
@@ -671,9 +653,9 @@
         stopNetworkAssignmentTimer()
 
         if submitOK then
-            format "[SUCCESS] Batch render submitted to Backburner with auto job-assignment handling.\n"
+            format "[SUCCESS] View03 batch render submitted to Backburner with auto job-assignment handling.\n"
         else
-            format "[ERROR] Failed to submit batch render to Backburner.\n"
+            format "[ERROR] Failed to submit View03 batch render to Backburner.\n"
 
         submitOK
     )
@@ -910,12 +892,10 @@
         editText etExt "Image Ext" pos:[380,228] width:80 text:IGR_RenderExt
         checkbox chkAutoDlg "Automate Network Job Assignment Dialog" pos:[480,230] checked:true
 
-        editText etV1 "View01 Name" pos:[20,258] width:120 text:IGR_View01Name
-        editText etV1Cam "View01 Camera" pos:[150,258] width:180 text:IGR_View01CameraName
-        editText etV1State "View01 State" pos:[340,258] width:120 text:IGR_View01State
-        editText etV2 "View02 Name" pos:[470,258] width:120 text:IGR_View02Name
-        editText etV2Cam "View02 Camera" pos:[600,258] width:180 text:IGR_View02CameraName
-        editText etV2State "View02 State" pos:[790,258] width:100 text:IGR_View02State
+        editText etV3 "View03 Name" pos:[20,258] width:120 text:IGR_View03Name
+        editText etV3Cam "View03 Camera" pos:[150,258] width:180 text:IGR_View03CameraName
+        editText etV3State "View03 State" pos:[340,258] width:120 text:IGR_View03State
+        label lVOnly "Only View03 is submitted by this script." pos:[470,260]
 
         editText etTaskPre "Task Prefix" pos:[20,288] width:220 text:IGR_TaskNamePrefix
         editText etTaskMid "Task Middle" pos:[250,288] width:640 text:IGR_TaskNameMiddle
@@ -980,12 +960,9 @@
             IGR_BackburnerPriority = spPriority.value
             IGR_RenderExt = etExt.text
 
-            IGR_View01Name = etV1.text
-            IGR_View01CameraName = etV1Cam.text
-            IGR_View01State = etV1State.text
-            IGR_View02Name = etV2.text
-            IGR_View02CameraName = etV2Cam.text
-            IGR_View02State = etV2State.text
+            IGR_View03Name = etV3.text
+            IGR_View03CameraName = etV3Cam.text
+            IGR_View03State = etV3State.text
 
             IGR_TaskNamePrefix = etTaskPre.text
             IGR_TaskNameMiddle = etTaskMid.text
