@@ -116,12 +116,12 @@
 
         if bn == undefined then bn = ""
 
-        if bn.count >= 3 and (substring bn (bn.count - 2) 1) == "_" then
-        (
-            local existing = substring bn (bn.count - 1) 2
-            if (matchPattern (toUpper existing) pattern:"[A-Z][A-Z]") then
-                return ((substring bn 1 (bn.count - 3)) + "_" + finishCode)
-        )
+        -- Strip any trailing finish chain like _WH or _WH_CN_GR_BL before appending target finish.
+        -- This prevents duplicated/stacked suffixes across repeated processing passes.
+        local rx = dotNetObject "System.Text.RegularExpressions.Regex" "(?:_[A-Za-z]{2})+$"
+        bn = rx.Replace bn ""
+
+        if bn == "" then bn = "VARIANT"
 
         bn + "_" + finishCode
     )
