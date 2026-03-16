@@ -5,10 +5,10 @@
       1) Recursively scan source folder for .max scenes
       2) For each source scene, build finish variants by reassigning materials
       3) Save variant scene file
-      4) Update preset Batch Render view output path (View03)
+      4) Update preset Batch Render View03 output path
       5) Auto-fix view camera + scene state mapping
       6) Auto-sync Corona Slicer cap override on Slice_Sink to current quartz
-      7) Submit both views to Backburner (manager: 10.10.0.59)
+      7) Submit View03 to Backburner (manager: 10.10.0.59)
 */
 
 (
@@ -43,7 +43,7 @@
     global IGR_View03CameraName = "Corona Camera 001"
     global IGR_View01State = "Full_Build"
     global IGR_View02State = "slice"
-    global IGR_View03State = "empty"
+    global IGR_View03State = "Empty"
 
     -- Task naming
     -- Example: KCL_144_IGR1_FDA_Quartz-Workstation-PK2s_QUWS-875-PK2_WH
@@ -502,6 +502,7 @@
         local targetFolder = findFirstMatchingDeliveryFolder fallbackVariantPath suffix
 
         -- Always key output filename from variant scene name so material ID/suffix is always correct.
+        -- Final filename always ENDS with finish code (e.g. _WH / _BL).
         local baseNameNoSuffix = getFilenameFile fallbackVariantPath
         local finalFileName = (normalizeBaseNameForFinish baseNameNoSuffix suffix) + IGR_RenderExt
 
@@ -509,13 +510,14 @@
         (
             targetFolder + finalFileName
         )
-        else if currentOut == undefined or currentOut == "" then
+        else if currentOut != undefined and currentOut != "" then
         (
-            buildFallbackRenderPath fallbackVariantPath viewName suffix sourceRoot
+            (getFilenamePath currentOut) + finalFileName
         )
         else
         (
-            (getFilenamePath currentOut) + finalFileName
+            -- Keep fallback folder behavior, but force normalized finish-safe filename.
+            (getFilenamePath (buildFallbackRenderPath fallbackVariantPath viewName suffix sourceRoot)) + finalFileName
         )
     )
 
