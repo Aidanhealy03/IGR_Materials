@@ -1,5 +1,5 @@
 /*
-    IGR / IPS Quartz Sink Finish Renderer (Multi-Scene)
+    IGR Quartz Sink Finish Renderer (Multi-Scene)
     ---------------------------------------------------
     Workflow:
       1) Prompt for a root folder at runtime
@@ -7,8 +7,8 @@
       3) Open each scene file
       4) For each SKU found by exact name, apply each quartz finish
       5) Render mapped cameras for the SKU size group
-      6) Save JPG renders to: R:\Aidan\IPS\<SKU>\
-         Filename format: <SKU>_<FINISH>_IPS##.jpg
+      6) Save JPG renders to: R:\Aidan\IGR\<SKU>\
+         Filename format: <SKU>_<FINISH>_IGR##.jpg
       7) Continue through all scene files (skip safely on failures)
 
     NOTE:
@@ -22,7 +22,10 @@
        ============================ */
 
     global IPS_QuartzLibPath = @"R:\Creative\3D Library\3D Library\Material Library\Quartz.mat"
-    global IPS_OutputRoot = @"R:\Aidan\IPS"
+    global IPS_OutputRoot = @"R:\Aidan\IGR"
+    global IGR_DefaultSceneState = "empty"
+    global IGR_SliceSceneState = "Slice"
+    global IGR_SliceCameraName = "Corona Camera 002"
 
     -- Quartz finish definitions: #("FinishCode", "QuartzMaterialName")
     global IPS_Finishes = #(
@@ -44,7 +47,7 @@
         #("QTWS-000",   "L")
     )
 
-    -- Size group -> camera names (render order = IPS01, IPS02, ...)
+    -- Size group -> camera names (render order = IGR01, IGR02, ...)
     global IPS_SizeGroupToCameras = #(
         #("S", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004")),
         #("M", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004")),
@@ -176,7 +179,7 @@
         ensureFolderExists skuFolder
 
         local idx = formattedPrint indexNum format:"02d"
-        skuFolder + sku + "_" + finishCode + "_IPS" + idx + ".jpg"
+        skuFolder + sku + "_" + finishCode + "_IGR" + idx + ".jpg"
     )
 
     fn getCameraNode camName =
@@ -190,6 +193,38 @@
     (
         try (JpegIO.setQuality IPS_JpegQuality) catch()
         try (if isProperty rendImageType #jpegQuality do rendImageType.jpegQuality = IPS_JpegQuality) catch()
+    )
+
+    fn restoreSceneStateBestEffort sceneStateName =
+    (
+        local applied = false
+
+        if sceneStateName == undefined or sceneStateName == "" then return false
+
+        try
+        (
+            sceneStateMgr.RestoreSceneState sceneStateName
+            applied = true
+        ) catch()
+
+        if not applied do
+        (
+            try
+            (
+                sceneStates.restore sceneStateName
+                applied = true
+            ) catch()
+        )
+
+        if not applied then
+            format "[WARN] Could not restore scene state: %\n" sceneStateName
+
+        applied
+    )
+
+    fn getSceneStateForCamera camName =
+    (
+        if (lowerSafe camName) == (lowerSafe IGR_SliceCameraName) then IGR_SliceSceneState else IGR_DefaultSceneState
     )
 
     fn renderSkuForFinish sku finishCode cameraNames =
@@ -208,10 +243,12 @@
             )
 
             local outPath = buildOutputFilePath sku finishCode i
+            local stateToUse = getSceneStateForCamera camName
 
             renderWidth = IPS_RenderWidth
             renderHeight = IPS_RenderHeight
             setJpegQualityBestEffort()
+            restoreSceneStateBestEffort stateToUse
 
             rendSaveFile = true
             rendOutputFilename = outPath
@@ -340,14 +377,14 @@
        Main
        ============================ */
 
-    format "\n=== IPS Multi-Scene Quartz Variant Renderer Started ===\n"
+    format "\n=== IGR Multi-Scene Quartz Variant Renderer Started ===\n"
 
     ensureFolderExists IPS_OutputRoot
 
     local rootFolder = promptForSceneRoot()
     if rootFolder == undefined then
     (
-        messageBox "No folder selected. Script cancelled." title:"IPS Quartz Variant Renderer"
+        messageBox "No folder selected. Script cancelled." title:"IGR Quartz Variant Renderer"
         format "[INFO] Cancelled: no source root selected.\n"
         return false
     )
@@ -357,7 +394,7 @@
 
     if sceneFiles.count == 0 then
     (
-        messageBox ("No .max files found under:\n" + rootFolder) title:"IPS Quartz Variant Renderer"
+        messageBox ("No .max files found under:\n" + rootFolder) title:"IGR Quartz Variant Renderer"
         format "[WARN] No scene files found under: %\n" rootFolder
         return false
     )
@@ -381,17 +418,17 @@
         )
     )
 
-    format "\n=== IPS Multi-Scene Render Completed ===\n"
+    format "\n=== IGR Multi-Scene Render Completed ===\n"
     format "[INFO] Source scenes with output: %\n" totalScenesProcessed
     format "[INFO] SKUs processed: %\n" totalSkusProcessed
     format "[INFO] Finishes processed: %\n" totalFinishesProcessed
     format "[INFO] JPG renders saved: %\n" totalRenders
 
     messageBox (
-        "IPS multi-scene render job complete.\n\n" +
+        "IGR multi-scene render job complete.\n\n" +
         "Source scenes with output: " + (totalScenesProcessed as string) + "\n" +
         "SKUs processed: " + (totalSkusProcessed as string) + "\n" +
         "Finishes processed: " + (totalFinishesProcessed as string) + "\n" +
         "JPG renders saved: " + (totalRenders as string)
-    ) title:"IPS Quartz Variant Renderer"
+    ) title:"IGR Quartz Variant Renderer"
 )
