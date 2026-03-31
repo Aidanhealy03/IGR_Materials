@@ -1,19 +1,18 @@
 /*
-    IGR / IPS Quartz Sink Finish Renderer (Single Scene)
-    ----------------------------------------------------
-    Rules implemented:
-      - Process CURRENTLY OPEN scene only
-      - Hardcoded SKU -> size group table
-      - Find sink by EXACT node name (SKU)
-      - Apply quartz finish materials one-by-one
-      - Render camera list by sink size group
-      - Save JPG renders to: R:\Aidan\IPS\<SKU>\
-      - Filename format: <SKU>_<FINISH>_IPS##.jpg
-      - Force render resolution 2000x2000
-      - Skip missing SKUs safely
+    IGR / IPS Quartz Sink Finish Renderer (Multi-Scene)
+    ---------------------------------------------------
+    Workflow:
+      1) Prompt for a root folder at runtime
+      2) Recursively find .max scene files under that folder
+      3) Open each scene file
+      4) For each SKU found by exact name, apply each quartz finish
+      5) Render mapped cameras for the SKU size group
+      6) Save JPG renders to: R:\Aidan\IPS\<SKU>\
+         Filename format: <SKU>_<FINISH>_IPS##.jpg
+      7) Continue through all scene files (skip safely on failures)
 
     NOTE:
-      - Update camera names in sizeGroupToCameras if your scene uses different names.
+      - Update SKU/camera mappings below to match production data.
       - This script intentionally ignores accessories/drains/racks/cutters.
 */
 
@@ -36,7 +35,6 @@
     )
 
     -- Hardcoded SKU -> size group lookup table
-    -- Add / edit entries as needed.
     global IPS_SkuToSizeGroup = #(
         #("Q-306",      "S"),
         #("Q-315",      "S"),
@@ -47,7 +45,6 @@
     )
 
     -- Size group -> camera names (render order = IPS01, IPS02, ...)
-    -- Replace these camera names with your scene's exact camera node names.
     global IPS_SizeGroupToCameras = #(
         #("S", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004")),
         #("M", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004")),
@@ -59,7 +56,7 @@
 
     global IPS_RenderWidth = 2000
     global IPS_RenderHeight = 2000
-    global IPS_JpegQuality = 100 -- highest quality when supported
+    global IPS_JpegQuality = 100
 
     /* ============================
        Helper functions
@@ -142,11 +139,9 @@
     (
         local out = #()
 
-        -- Include exact SKU node hierarchy
         append out skuNode
         for c in skuNode.children do append out c
 
-        -- Include any scene object whose name starts with known sink prefixes
         for n in objects do
         (
             if nodeNameStartsWithAnyPrefix n IPS_TargetNamePrefixes do
@@ -197,7 +192,7 @@
         try (if isProperty rendImageType #jpegQuality do rendImageType.jpegQuality = IPS_JpegQuality) catch()
     )
 
-    fn renderSkuForFinish sku finishCode quartzMat cameraNames =
+    fn renderSkuForFinish sku finishCode cameraNames =
     (
         local renderCount = 0
 
@@ -218,7 +213,6 @@
             renderHeight = IPS_RenderHeight
             setJpegQualityBestEffort()
 
-            -- Force save-file behavior per render
             rendSaveFile = true
             rendOutputFilename = outPath
 
@@ -240,7 +234,7 @@
         if skuNode == undefined then
         (
             format "[INFO] SKU not in this scene, skipped: %\n" sku
-            return #(0,0) -- #(renders, finishesProcessed)
+            return #(0,0)
         )
 
         local sizeGroup = findSizeGroupForSku sku
@@ -275,46 +269,129 @@
             if assignQuartzToTargetNodes targetNodes quartzMat sku finishCode then
             (
                 finishCount += 1
-                totalRenders += renderSkuForFinish sku finishCode quartzMat cams
+                totalRenders += renderSkuForFinish sku finishCode cams
             )
         )
 
         #(totalRenders, finishCount)
     )
 
+    fn collectMaxFilesRecursive rootPath outArr =
+    (
+        local root = ensureTrailingBackslash rootPath
+        if not (doesDirectoryExist root) then return outArr
+
+        local localFiles = getFiles (root + "*.max")
+        for f in localFiles do append outArr f
+
+        local subDirs = getDirectories (root + "*")
+        for d in subDirs do collectMaxFilesRecursive d outArr
+
+        outArr
+    )
+
+    fn promptForSceneRoot =
+    (
+        local p = getSavePath caption:"Select root folder containing SKU scene files"
+        if p == undefined or p == "" then undefined else p
+    )
+
+    fn processSceneFile scenePath =
+    (
+        format "\n=== Opening scene: % ===\n" scenePath
+
+        local loaded = false
+        try
+        (
+            loaded = loadMaxFile scenePath useFileUnits:true quiet:true
+        )
+        catch
+        (
+            loaded = false
+        )
+
+        if loaded != true then
+        (
+            format "[WARN] Could not open scene, skipped: %\n" scenePath
+            return #(0,0,0)
+        )
+
+        local sceneRenders = 0
+        local sceneFinishes = 0
+        local sceneSkuProcessed = 0
+
+        for row in IPS_SkuToSizeGroup do
+        (
+            local sku = row[1]
+            local result = processSkuInCurrentScene sku
+            if result[2] > 0 do
+            (
+                sceneSkuProcessed += 1
+                sceneRenders += result[1]
+                sceneFinishes += result[2]
+            )
+        )
+
+        format "[INFO] Scene complete -> SKUs: %, Finishes: %, Renders: %\n" sceneSkuProcessed sceneFinishes sceneRenders
+        #(sceneSkuProcessed, sceneFinishes, sceneRenders)
+    )
+
     /* ============================
-       Main (CURRENT OPEN SCENE ONLY)
+       Main
        ============================ */
 
-    format "\n=== IPS Single-Scene Quartz Variant Renderer Started ===\n"
+    format "\n=== IPS Multi-Scene Quartz Variant Renderer Started ===\n"
 
     ensureFolderExists IPS_OutputRoot
 
-    local sceneRenders = 0
-    local sceneFinishes = 0
-    local sceneSkuProcessed = 0
-
-    for row in IPS_SkuToSizeGroup do
+    local rootFolder = promptForSceneRoot()
+    if rootFolder == undefined then
     (
-        local sku = row[1]
-        local result = processSkuInCurrentScene sku
-        if result[2] > 0 do
+        messageBox "No folder selected. Script cancelled." title:"IPS Quartz Variant Renderer"
+        format "[INFO] Cancelled: no source root selected.\n"
+        return false
+    )
+
+    local sceneFiles = #()
+    collectMaxFilesRecursive rootFolder sceneFiles
+
+    if sceneFiles.count == 0 then
+    (
+        messageBox ("No .max files found under:\n" + rootFolder) title:"IPS Quartz Variant Renderer"
+        format "[WARN] No scene files found under: %\n" rootFolder
+        return false
+    )
+
+    format "[INFO] Found % scene file(s) under: %\n" sceneFiles.count rootFolder
+
+    local totalScenesProcessed = 0
+    local totalSkusProcessed = 0
+    local totalFinishesProcessed = 0
+    local totalRenders = 0
+
+    for scenePath in sceneFiles do
+    (
+        local res = processSceneFile scenePath
+        if (res[1] + res[2] + res[3]) > 0 do
         (
-            sceneSkuProcessed += 1
-            sceneRenders += result[1]
-            sceneFinishes += result[2]
+            totalScenesProcessed += 1
+            totalSkusProcessed += res[1]
+            totalFinishesProcessed += res[2]
+            totalRenders += res[3]
         )
     )
 
-    format "\n=== IPS Render Completed (Current Scene) ===\n"
-    format "[INFO] SKUs processed in scene: %\n" sceneSkuProcessed
-    format "[INFO] Finishes processed: %\n" sceneFinishes
-    format "[INFO] JPG renders saved: %\n" sceneRenders
+    format "\n=== IPS Multi-Scene Render Completed ===\n"
+    format "[INFO] Source scenes with output: %\n" totalScenesProcessed
+    format "[INFO] SKUs processed: %\n" totalSkusProcessed
+    format "[INFO] Finishes processed: %\n" totalFinishesProcessed
+    format "[INFO] JPG renders saved: %\n" totalRenders
 
     messageBox (
-        "IPS render job complete (current scene).\n\n" +
-        "SKUs processed: " + (sceneSkuProcessed as string) + "\n" +
-        "Finishes processed: " + (sceneFinishes as string) + "\n" +
-        "JPG renders saved: " + (sceneRenders as string)
+        "IPS multi-scene render job complete.\n\n" +
+        "Source scenes with output: " + (totalScenesProcessed as string) + "\n" +
+        "SKUs processed: " + (totalSkusProcessed as string) + "\n" +
+        "Finishes processed: " + (totalFinishesProcessed as string) + "\n" +
+        "JPG renders saved: " + (totalRenders as string)
     ) title:"IPS Quartz Variant Renderer"
 )
