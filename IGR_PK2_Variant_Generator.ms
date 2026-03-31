@@ -208,65 +208,70 @@
     fn restoreSceneStateBestEffort stateName =
     (
         local ok = false
+        local errText = ""
         if stateName == undefined or stateName == "" then return false
 
-        -- User-locked names: use exact state names first.
-        local candidates = #(stateName)
+        local sceneStateCount = 0
+        try (sceneStateCount = sceneStateMgr.GetCount()) catch (sceneStateCount = 0)
+        logLine ("SceneState restore request: '" + stateName + "' | total states in scene: " + (sceneStateCount as string))
 
-        -- 1) sceneStateMgr.RestoreSceneState
-        for s in candidates while (not ok) do
+        if sceneStateCount < 1 then
+        (
+            logLine "ERROR: No scene states are present in this scene."
+            return false
+        )
+
+        local stateIndex = -1
+        try (stateIndex = sceneStateMgr.FindSceneState stateName) catch (stateIndex = -1)
+        if stateIndex < 1 then
+        (
+            logLine ("ERROR: Scene state not found by exact name: '" + stateName + "'")
+            local available = ""
+            for i = 1 to sceneStateCount do
+            (
+                local n = ""
+                try (n = sceneStateMgr.GetSceneState i) catch (n = "")
+                available += n
+                if i < sceneStateCount do available += ", "
+            )
+            logLine ("INFO: Available scene states: " + available)
+            return false
+        )
+
+        -- Build a broad 'all parts' bitarray for SceneStateMgr.Restore().
+        local parts = bitArray 64
+        for i = 1 to parts.count do parts[i] = true
+
+        -- Preferred MAXScript API from Autodesk docs:
+        -- sceneStateMgr.Restore <string>name <bitArray>parts
+        try
+        (
+            ok = sceneStateMgr.Restore stateName parts
+            logLine ("SceneStateMgr.Restore('" + stateName + "') returned: " + (ok as string))
+        )
+        catch
+        (
+            errText = (getCurrentException() as string)
+            logLine ("ERROR: sceneStateMgr.Restore failed for '" + stateName + "' | " + errText)
+        )
+
+        -- Legacy fallback for scenes/plugins exposing sceneStates struct.
+        if (not ok) do
         (
             try
             (
-                sceneStateMgr.RestoreSceneState s
+                sceneStates.restore stateName
                 ok = true
-            ) catch()
-        )
-
-        -- 2) sceneStateMgr.restoreState
-        if not ok do
-        (
-            for s in candidates while (not ok) do
+                logLine ("Fallback sceneStates.restore('" + stateName + "') succeeded.")
+            )
+            catch
             (
-                try
-                (
-                    sceneStateMgr.restoreState s
-                    ok = true
-                ) catch()
+                errText = (getCurrentException() as string)
+                logLine ("ERROR: sceneStates.restore failed for '" + stateName + "' | " + errText)
             )
         )
 
-        -- 3) sceneStates.restore
-        if not ok do
-        (
-            for s in candidates while (not ok) do
-            (
-                try
-                (
-                    sceneStates.restore s
-                    ok = true
-                ) catch()
-            )
-        )
-
-        if not ok then
-        (
-            logLine ("WARN: Failed to restore scene state: " + stateName)
-            try
-            (
-                local names = sceneStateMgr.getSceneStateNames()
-                if names != undefined and names.count > 0 do
-                (
-                    local s = ""
-                    for i = 1 to names.count do
-                    (
-                        s += names[i]
-                        if i < names.count do s += ", "
-                    )
-                    logLine ("INFO: Scene states detected: " + s)
-                )
-            ) catch()
-        )
+        if not ok then logLine ("WARN: Failed to restore scene state: " + stateName)
         ok
     )
 
