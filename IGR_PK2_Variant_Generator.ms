@@ -62,7 +62,7 @@
     /* =========================
        LOGGING + HELPERS
        ========================= */
-    fn timeStamp = (localTime as string)
+    fn igrTimeStamp = (localTime as string)
 
     fn safeMakeDir p =
     (
@@ -75,7 +75,7 @@
     (
         if safeMakeDir OUTPUT_ROOT then
         (
-            local stamp = substituteString (substituteString (substituteString (timeStamp()) "/" "-") ":" "-") " " "_"
+            local stamp = substituteString (substituteString (substituteString (igrTimeStamp()) "/" "-") ":" "-") " " "_"
             IGR_LogFilePath = OUTPUT_ROOT + "\\IGR_Backburner_Log_" + stamp + ".txt"
             try
             (
@@ -88,7 +88,7 @@
 
     fn logLine msg =
     (
-        local line = "[" + timeStamp() + "] " + msg
+        local line = "[" + igrTimeStamp() + "] " + msg
         format "%\n" line
         if IGR_LogFilePath != undefined then
         (
