@@ -123,6 +123,16 @@
         out
     )
 
+    fn collectTargetNodesForSku skuNode =
+    (
+        local out = collectHierarchy skuNode
+        for o in objects where (isValidNode o and isSinkNodeName o.name) do
+        (
+            if (findItem out o) == 0 do append out o
+        )
+        out
+    )
+
     fn getNodeByExactName n = getNodeByName n exact:true ignoreCase:false
 
     fn loadQuartzMaterialByName matName =
@@ -135,7 +145,7 @@
         for i = 1 to ml.count do
         (
             local m = ml[i]
-            if m != undefined and (toUpper m.name == toUpper matName) then return m
+            if m != undefined and (toUpper m.name == toUpper matName) then return (copy m)
         )
         undefined
     )
@@ -264,10 +274,18 @@
         if p == undefined or p == "" then undefined else p
     )
 
-    fn applyMaterialToSinkHierarchy skuNode matObj =
+    fn applyMaterialToNodes nodeList matObj =
     (
-        local nodes = collectHierarchy skuNode
-        for n in nodes where (isValidNode n and isKindOf n GeometryClass) do try (n.material = matObj) catch()
+        local assigned = 0
+        for n in nodeList where (isValidNode n and isKindOf n GeometryClass) do
+        (
+            try
+            (
+                n.material = matObj
+                assigned += 1
+            ) catch()
+        )
+        assigned
     )
 
     fn hideAllSinks =
@@ -300,6 +318,7 @@
         (
             local skuNode = getNodeByExactName sku
             if skuNode == undefined do continue
+            local targetNodes = collectTargetNodesForSku skuNode
 
             if not ensureSkuOutputFolder sku do continue
 
@@ -320,7 +339,8 @@
                 (
                     hideAllSinks()
                     showSinkHierarchy skuNode
-                    applyMaterialToSinkHierarchy skuNode qMat
+                    local assignedCount = applyMaterialToNodes targetNodes qMat
+                    logLine ("Applied material '" + matName + "' to " + (assignedCount as string) + " node(s) for " + sku)
                     completeRedraw()
                 ) catch()
 
