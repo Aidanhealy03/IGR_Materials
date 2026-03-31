@@ -133,6 +133,13 @@
         out
     )
 
+    fn selectSkuAndChildren skuNode =
+    (
+        local nodes = collectHierarchy skuNode
+        try (select nodes) catch()
+        nodes
+    )
+
     fn getNodeByExactName n = getNodeByName n exact:true ignoreCase:false
 
     fn loadQuartzMaterialByName matName =
@@ -174,22 +181,71 @@
         local ok = false
         if stateName == undefined or stateName == "" then return false
 
-        try
-        (
-            sceneStateMgr.RestoreSceneState stateName
-            ok = true
-        ) catch()
+        -- Try common capitalization variants first.
+        local candidates = #(stateName, toLower stateName, toUpper stateName)
+        if (toLower stateName) == "empty" then appendIfUnique candidates "Empty"
+        if (toLower stateName) == "slice" then appendIfUnique candidates "SLICE"
 
-        if not ok do
+        -- 1) sceneStateMgr.RestoreSceneState
+        for s in candidates while (not ok) do
         (
             try
             (
-                sceneStates.restore stateName
+                sceneStateMgr.RestoreSceneState s
                 ok = true
             ) catch()
         )
 
-        if not ok then logLine ("WARN: Failed to restore scene state: " + stateName)
+        -- 2) sceneStateMgr.restoreState
+        if not ok do
+        (
+            for s in candidates while (not ok) do
+            (
+                try
+                (
+                    sceneStateMgr.restoreState s
+                    ok = true
+                ) catch()
+            )
+        )
+
+        -- 3) sceneStates.restore
+        if not ok do
+        (
+            for s in candidates while (not ok) do
+            (
+                try
+                (
+                    sceneStates.restore s
+                    ok = true
+                ) catch()
+            )
+        )
+
+        -- 4) ActionManager fallback (if scene state names exist as actions)
+        if not ok do
+        (
+            try (actionMan.executeAction 0 "50013") catch() -- Scene States dialog/action fallback
+        )
+
+        if not ok then
+        (
+            logLine ("WARN: Failed to restore scene state: " + stateName)
+            try
+            (
+                local names = sceneStateMgr.getSceneStateNames()
+                if names != undefined and names.count > 0 do
+                (
+                    local s = ""
+                    for i = 1 to names.count do
+                    (
+                        s += names[i]
+                        if i < names.count do s += ", "
+                    )
+                    logLine ("INFO: Scene states detected: " + s)
+                )
+            ) catch()
+        )
         ok
     )
 
@@ -339,6 +395,8 @@
                 (
                     hideAllSinks()
                     showSinkHierarchy skuNode
+                    local selectedNodes = selectSkuAndChildren skuNode
+                    if selectedNodes != undefined then logLine ("Selected SKU hierarchy node count: " + (selectedNodes.count as string))
                     local assignedCount = applyMaterialToNodes targetNodes qMat
                     logLine ("Applied material '" + matName + "' to " + (assignedCount as string) + " node(s) for " + sku)
                     completeRedraw()
