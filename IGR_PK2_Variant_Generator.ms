@@ -29,7 +29,7 @@
     global MAXCMD_EXE         = (getDir #maxroot) + "3dsmaxcmd.exe"
 
     global IGR_CAMERA_RENDER_PLAN = #(
-        #("Corona Camera001", "empty"), -- Image 01
+        #("Corona Camera001", "Empty"), -- Image 01
         #("Corona Camera002", "Slice")  -- Image 02
     )
 
@@ -181,10 +181,8 @@
         local ok = false
         if stateName == undefined or stateName == "" then return false
 
-        -- Try common capitalization variants first.
-        local candidates = #(stateName, toLower stateName, toUpper stateName)
-        if (toLower stateName) == "empty" then appendIfUnique candidates "Empty"
-        if (toLower stateName) == "slice" then appendIfUnique candidates "SLICE"
+        -- User-locked names: use exact state names first.
+        local candidates = #(stateName)
 
         -- 1) sceneStateMgr.RestoreSceneState
         for s in candidates while (not ok) do
@@ -220,12 +218,6 @@
                     ok = true
                 ) catch()
             )
-        )
-
-        -- 4) ActionManager fallback (if scene state names exist as actions)
-        if not ok do
-        (
-            try (actionMan.executeAction 0 "50013") catch() -- Scene States dialog/action fallback
         )
 
         if not ok then
@@ -391,17 +383,6 @@
                     continue
                 )
 
-                try
-                (
-                    hideAllSinks()
-                    showSinkHierarchy skuNode
-                    local selectedNodes = selectSkuAndChildren skuNode
-                    if selectedNodes != undefined then logLine ("Selected SKU hierarchy node count: " + (selectedNodes.count as string))
-                    local assignedCount = applyMaterialToNodes targetNodes qMat
-                    logLine ("Applied material '" + matName + "' to " + (assignedCount as string) + " node(s) for " + sku)
-                    completeRedraw()
-                ) catch()
-
                 for i = 1 to IGR_CAMERA_RENDER_PLAN.count do
                 (
                     local camName = IGR_CAMERA_RENDER_PLAN[i][1]
@@ -413,7 +394,18 @@
                         continue
                     )
 
-                    restoreSceneStateBestEffort stateName
+                    if not (restoreSceneStateBestEffort stateName) then
+                    (
+                        throw ("HardFail: could not restore scene state '" + stateName + "' for camera " + camName + " in scene " + scenePath)
+                    )
+
+                    hideAllSinks()
+                    showSinkHierarchy skuNode
+                    local selectedNodes = selectSkuAndChildren skuNode
+                    if selectedNodes != undefined then logLine ("Selected SKU hierarchy node count: " + (selectedNodes.count as string))
+                    local assignedCount = applyMaterialToNodes targetNodes qMat
+                    logLine ("Applied material '" + matName + "' to " + (assignedCount as string) + " node(s) for " + sku + " before camera " + camName)
+
                     try (viewport.setCamera camNode) catch()
                     completeRedraw()
                     sleep (SUBMISSION_STABILIZE_MS / 1000.0)
