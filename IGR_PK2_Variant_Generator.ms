@@ -273,7 +273,7 @@
     fn extractSkuFromName baseName =
     (
         local sku = ""
-        local rx = dotNetObject "System.Text.RegularExpressions.Regex" "([A-Za-z]+-[0-9]+)"
+        local rx = dotNetObject "System.Text.RegularExpressions.Regex" "([A-Za-z]+-[0-9]+(?:-[A-Za-z0-9]+)?)"
         local m = rx.Match baseName
         if m.Success then
             sku = m.Groups.Item[1].Value
@@ -302,6 +302,19 @@
                 return (ensureTrailingBackslash d)
         )
         undefined
+    )
+
+
+    fn buildRenderFileBaseName variantScenePath suffix =
+    (
+        local finishCode = getFinishCodeFromSuffix suffix
+        local sceneBase = getFilenameFile variantScenePath
+        local sku = extractSkuFromName sceneBase
+
+        if sku == undefined or sku == "" then
+            sku = normalizeBaseNameForFinish sceneBase suffix
+
+        sku + "_" + finishCode
     )
 
     fn buildVariantOutputPath sourceFile outputRoot sourceRoot suffix =
@@ -502,9 +515,8 @@
         local targetFolder = findFirstMatchingDeliveryFolder fallbackVariantPath suffix
 
         -- Always key output filename from variant scene name so material ID/suffix is always correct.
-        -- Final filename always ENDS with finish code (e.g. _WH / _BL).
-        local baseNameNoSuffix = getFilenameFile fallbackVariantPath
-        local finalFileName = (normalizeBaseNameForFinish baseNameNoSuffix suffix) + IGR_RenderExt
+        -- Final filename always ENDS with finish code (e.g. _WH / _BL), with no stacked chains.
+        local finalFileName = (buildRenderFileBaseName fallbackVariantPath suffix) + IGR_RenderExt
 
         if targetFolder != undefined then
         (
