@@ -1,34 +1,38 @@
 /*
-    IGR Quartz Sink Finish Renderer (Multi-Scene)
-    ---------------------------------------------------
+    IGR Quartz Sink Backburner Submission (Multi-Scene)
+    ----------------------------------------------------
     Workflow:
-      1) Prompt for a root folder at runtime
-      2) Recursively find .max scene files under that folder
-      3) Open each scene file
-      4) For each SKU found by exact name, apply each quartz finish
-      5) Render mapped cameras for the SKU size group
-      6) Save JPG renders to: R:\Aidan\IGR\<SKU>\
-         Filename format: <SKU>_<FINISH>_IGR##.jpg
-      7) Continue through all scene files (skip safely on failures)
+      1) Prompt for source root folder
+      2) Recursively find and open .max scene files
+      3) For each mapped SKU found in each scene, apply quartz finishes
+      4) For each camera, restore scene state (empty except Camera002 -> Slice)
+      5) Save temp scene snapshot and submit render to Backburner via 3dsmaxcmd
 
-    NOTE:
-      - Update SKU/camera mappings below to match production data.
-      - This script intentionally ignores accessories/drains/racks/cutters.
+    Render output:
+      R:\Aidan\IGR\<SKU>\<SKU>_<FINISH>_IGR##.jpg
 */
 
 (
-    /* ============================
-       User-editable settings
-       ============================ */
+    /* =========================
+       USER SETTINGS
+       ========================= */
+    global OUTPUT_ROOT        = @"R:\Aidan\IGR"
+    global QUARTZ_MATLIB      = @"R:\Creative\3D Library\3D Library\Material Library\Quartz.mat"
+    global RENDER_WIDTH       = 2000
+    global RENDER_HEIGHT      = 2000
+    global BACKBURNER_MANAGER = "10.10.0.59"
+    global BACKBURNER_PORT    = 3234
+    global TEMP_SCENE_FOLDER  = @"R:\Aidan\IGR\_TempScenes"
+    global DRY_RUN            = false
+    global SUBMISSION_STABILIZE_MS = 250
+    global JOB_PRIORITY       = 50
+    global MAXCMD_EXE         = (getDir #maxroot) + "3dsmaxcmd.exe"
 
-    global IPS_QuartzLibPath = @"R:\Creative\3D Library\3D Library\Material Library\Quartz.mat"
-    global IPS_OutputRoot = @"R:\Aidan\IGR"
-    global IGR_DefaultSceneState = "empty"
-    global IGR_SliceSceneState = "Slice"
-    global IGR_SliceCameraName = "Corona Camera 002"
+    global IGR_EMPTY_SCENESTATE = "empty"
+    global IGR_SLICE_SCENESTATE = "Slice"
+    global IGR_SLICE_CAMERA     = "Corona Camera 002"
 
-    -- Quartz finish definitions: #("FinishCode", "QuartzMaterialName")
-    global IPS_Finishes = #(
+    global FINISHES = #(
         #("WH", "White_Quartz"),
         #("BL", "Black_Quartz"),
         #("CN", "Concrete_Quartz_02"),
@@ -37,8 +41,7 @@
         #("BI", "Bisque_Quartz_02")
     )
 
-    -- Hardcoded SKU -> size group lookup table
-    global IPS_SkuToSizeGroup = #(
+    global SKU_TO_SIZE = #(
         #("Q-306",      "S"),
         #("Q-315",      "S"),
         #("QUWS-875",   "L"),
@@ -47,283 +50,233 @@
         #("QTWS-000",   "L")
     )
 
-    -- Size group -> camera names (render order = IGR01, IGR02, ...)
-    global IPS_SizeGroupToCameras = #(
+    global SIZE_TO_CAMERAS = #(
         #("S", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004")),
         #("M", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004")),
         #("L", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004"))
     )
 
-    -- Apply quartz material to objects whose names start with these prefixes
-    global IPS_TargetNamePrefixes = #("Q", "QA", "QAR", "QU", "QT", "QAWS", "QARWS", "QUWS", "QTWS")
+    global VALID_SINK_PREFIXES = #( "QARWS", "QAWS", "QUWS", "QTWS", "QAR", "QA", "QU", "QT", "Q" )
+    global IGR_LogFilePath = undefined
 
-    global IPS_RenderWidth = 2000
-    global IPS_RenderHeight = 2000
-    global IPS_JpegQuality = 100
+    /* =========================
+       LOGGING + HELPERS
+       ========================= */
+    fn timeStamp = (localTime as string)
 
-    /* ============================
-       Helper functions
-       ============================ */
-
-    fn lowerSafe s = if s == undefined then "" else toLower (s as string)
-
-    fn ensureTrailingBackslash p =
+    fn safeMakeDir p =
     (
-        if p == undefined or p == "" then "" else
+        if p == undefined or p == "" then return false
+        if doesDirectoryExist p then return true
+        makeDir p all:true
+    )
+
+    fn initLog =
+    (
+        if safeMakeDir OUTPUT_ROOT then
         (
-            local c = substring p p.count 1
-            if c == "\\" then p else (p + "\\")
+            local stamp = substituteString (substituteString (substituteString (timeStamp()) "/" "-") ":" "-") " " "_"
+            IGR_LogFilePath = OUTPUT_ROOT + "\\IGR_Backburner_Log_" + stamp + ".txt"
+            try
+            (
+                local f = createFile IGR_LogFilePath
+                format "IGR Quartz Backburner Log\n" to:f
+                close f
+            ) catch (IGR_LogFilePath = undefined)
         )
     )
 
-    fn ensureFolderExists folderPath = makeDir folderPath all:true
-
-    fn startsWithCI txt prefix =
+    fn logLine msg =
     (
-        local t = lowerSafe txt
-        local p = lowerSafe prefix
-        if p.count == 0 or t.count < p.count then false else ((substring t 1 p.count) == p)
+        local line = "[" + timeStamp() + "] " + msg
+        format "%\n" line
+        if IGR_LogFilePath != undefined then
+        (
+            try
+            (
+                local f = openFile IGR_LogFilePath mode:"a"
+                format "%\n" line to:f
+                close f
+            ) catch()
+        )
     )
 
-    fn nodeNameStartsWithAnyPrefix n prefixes =
+    fn startsWithAny source prefixes =
     (
+        if source == undefined then return false
+        local upperName = toUpper source
         for p in prefixes do
         (
-            if startsWithCI n.name p do return true
+            if matchPattern upperName pattern:((toUpper p) + "*") ignoreCase:true do return true
         )
         false
     )
 
-    fn getMaterialFromQuartzLibrary matName =
+    fn isSinkNodeName nodeName = startsWithAny nodeName VALID_SINK_PREFIXES
+
+    fn collectHierarchyWalk n outRef =
     (
-        if not (doesFileExist IPS_QuartzLibPath) then
-        (
-            format "[ERROR] Quartz library does not exist: %\n" IPS_QuartzLibPath
-            return undefined
-        )
-
-        local lib = loadTempMaterialLibrary IPS_QuartzLibPath
-        if lib == undefined then
-        (
-            format "[ERROR] Failed to load Quartz library: %\n" IPS_QuartzLibPath
-            return undefined
-        )
-
-        local target = lowerSafe matName
-        for i = 1 to lib.count do
-        (
-            local m = lib[i]
-            if m != undefined and (lowerSafe m.name) == target do return (copy m)
-        )
-
-        format "[WARN] Quartz material not found: %\n" matName
-        undefined
+        if n == undefined or (not isValidNode n) then return undefined
+        append outRef n
+        for c in n.children do collectHierarchyWalk c outRef
     )
 
-    fn findSizeGroupForSku sku =
-    (
-        for row in IPS_SkuToSizeGroup do
-        (
-            if (lowerSafe row[1]) == (lowerSafe sku) do return row[2]
-        )
-        undefined
-    )
-
-    fn findCameraListForSizeGroup sizeGroup =
-    (
-        for row in IPS_SizeGroupToCameras do
-        (
-            if (lowerSafe row[1]) == (lowerSafe sizeGroup) do return row[2]
-        )
-        undefined
-    )
-
-    fn collectTargetNodesForSku skuNode =
+    fn collectHierarchy n =
     (
         local out = #()
-
-        append out skuNode
-        for c in skuNode.children do append out c
-
-        for n in objects do
-        (
-            if nodeNameStartsWithAnyPrefix n IPS_TargetNamePrefixes do
-            (
-                if (findItem out n) == 0 do append out n
-            )
-        )
-
+        collectHierarchyWalk n out
         out
     )
 
-    fn assignQuartzToTargetNodes targetNodes quartzMat sku finishCode =
+    fn getNodeByExactName n = getNodeByName n exact:true ignoreCase:false
+
+    fn findSizeGroup sku =
     (
-        if quartzMat == undefined then return false
-        local assigned = 0
-        for n in targetNodes do
+        for row in SKU_TO_SIZE where (toUpper row[1]) == (toUpper sku) do return row[2]
+        undefined
+    )
+
+    fn getCamerasForSizeGroup g =
+    (
+        for row in SIZE_TO_CAMERAS where (toUpper row[1]) == (toUpper g) do return row[2]
+        undefined
+    )
+
+    fn loadQuartzMaterialByName matName =
+    (
+        if not doesFileExist QUARTZ_MATLIB then return undefined
+        local ml = undefined
+        try (ml = loadTempMaterialLibrary QUARTZ_MATLIB) catch (ml = undefined)
+        if ml == undefined then return undefined
+
+        for i = 1 to ml.count do
         (
-            if isProperty n #material then
-            (
-                n.material = quartzMat
-                assigned += 1
-            )
+            local m = ml[i]
+            if m != undefined and (toUpper m.name == toUpper matName) then return m
         )
-
-        format "[INFO] SKU % finish % -> assigned quartz '%' to % node(s).\n" sku finishCode quartzMat.name assigned
-        true
+        undefined
     )
 
-    fn buildOutputFilePath sku finishCode indexNum =
+    fn buildOutputFilePath sku finishCode igrIndex =
     (
-        local skuFolder = ensureTrailingBackslash IPS_OutputRoot + sku + "\\"
-        ensureFolderExists skuFolder
-
-        local idx = formattedPrint indexNum format:"02d"
-        skuFolder + sku + "_" + finishCode + "_IGR" + idx + ".jpg"
+        local idxStr = formattedPrint igrIndex format:"02d"
+        local fileName = sku + "_" + finishCode + "_IGR" + idxStr + ".jpg"
+        OUTPUT_ROOT + "\\" + sku + "\\" + fileName
     )
 
-    fn getCameraNode camName =
+    fn ensureSkuOutputFolder sku = safeMakeDir (OUTPUT_ROOT + "\\" + sku)
+    fn ensureTempFolder = safeMakeDir TEMP_SCENE_FOLDER
+
+    fn buildTempScenePath token = (TEMP_SCENE_FOLDER + "\\" + token + ".max")
+
+    fn saveTempSceneSnapshot tempScenePath =
     (
-        local c = getNodeByName camName exact:true
-        if c == undefined then c = getNodeByName camName
-        c
+        if DRY_RUN then return true
+        local saved = saveMaxFile tempScenePath clearNeedSaveFlag:true useNewFile:false quiet:true
+        if saved then doesFileExist tempScenePath else false
     )
 
-    fn setJpegQualityBestEffort =
+    fn sceneStateForCamera cameraName =
     (
-        try (JpegIO.setQuality IPS_JpegQuality) catch()
-        try (if isProperty rendImageType #jpegQuality do rendImageType.jpegQuality = IPS_JpegQuality) catch()
+        if (toUpper cameraName) == (toUpper IGR_SLICE_CAMERA) then IGR_SLICE_SCENESTATE else IGR_EMPTY_SCENESTATE
     )
 
-    fn restoreSceneStateBestEffort sceneStateName =
+    fn restoreSceneStateBestEffort stateName =
     (
-        local applied = false
-
-        if sceneStateName == undefined or sceneStateName == "" then return false
+        local ok = false
+        if stateName == undefined or stateName == "" then return false
 
         try
         (
-            sceneStateMgr.RestoreSceneState sceneStateName
-            applied = true
+            sceneStateMgr.RestoreSceneState stateName
+            ok = true
         ) catch()
 
-        if not applied do
+        if not ok do
         (
             try
             (
-                sceneStates.restore sceneStateName
-                applied = true
+                sceneStates.restore stateName
+                ok = true
             ) catch()
         )
 
-        if not applied then
-            format "[WARN] Could not restore scene state: %\n" sceneStateName
-
-        applied
+        if not ok then logLine ("WARN: Failed to restore scene state: " + stateName)
+        ok
     )
 
-    fn getSceneStateForCamera camName =
+    fn submitViaMaxCmd scenePath jobName cameraName outputPath width height =
     (
-        if (lowerSafe camName) == (lowerSafe IGR_SliceCameraName) then IGR_SliceSceneState else IGR_DefaultSceneState
-    )
+        if DRY_RUN then return true
 
-    fn renderSkuForFinish sku finishCode cameraNames =
-    (
-        local renderCount = 0
-
-        for i = 1 to cameraNames.count do
+        if not doesFileExist MAXCMD_EXE then
         (
-            local camName = cameraNames[i]
-            local camNode = getCameraNode camName
+            logLine ("ERROR: 3dsmaxcmd.exe not found at: " + MAXCMD_EXE)
+            return false
+        )
 
-            if camNode == undefined then
+        local cmd = "\"" + MAXCMD_EXE + "\"" + \
+            " -submit:" + BACKBURNER_MANAGER + \
+            " -port:" + (BACKBURNER_PORT as string) + \
+            " -jobName:\"" + jobName + "\"" + \
+            " -priority:" + (JOB_PRIORITY as string) + \
+            " -camera:\"" + cameraName + "\"" + \
+            " -outputName:\"" + outputPath + "\"" + \
+            " -stillFrame" + \
+            " -w:" + (width as string) + \
+            " -h:" + (height as string) + \
+            " \"" + scenePath + "\""
+
+        local batFile = TEMP_SCENE_FOLDER + "\\_igr_submit.bat"
+        local outFile = TEMP_SCENE_FOLDER + "\\_igr_submit_out.txt"
+
+        try
+        (
+            local bf = createFile batFile
+            format "@echo off\n" to:bf
+            format "% > \"%\" 2>&1\n" cmd outFile to:bf
+            close bf
+        )
+        catch
+        (
+            logLine ("ERROR: Could not write temp bat file: " + batFile)
+            return false
+        )
+
+        local rc = undefined
+        try (rc = DOSCommand batFile) catch (rc = undefined)
+
+        if doesFileExist outFile then
+        (
+            try
             (
-                format "[WARN] Camera not found for SKU %: %\n" sku camName
-                continue
-            )
-
-            local outPath = buildOutputFilePath sku finishCode i
-            local stateToUse = getSceneStateForCamera camName
-
-            renderWidth = IPS_RenderWidth
-            renderHeight = IPS_RenderHeight
-            setJpegQualityBestEffort()
-            restoreSceneStateBestEffort stateToUse
-
-            rendSaveFile = true
-            rendOutputFilename = outPath
-
-            local bmp = render camera:camNode outputFile:outPath vfb:false
-            if bmp != undefined do
-            (
-                close bmp
-                renderCount += 1
-                format "[SUCCESS] Rendered: %\n" outPath
-            )
+                local lf = openFile outFile mode:"r"
+                while not (eof lf) do
+                (
+                    local line = readLine lf
+                    if line != "" do logLine ("  [3dsmaxcmd] " + line)
+                )
+                close lf
+            ) catch()
         )
 
-        renderCount
-    )
-
-    fn processSkuInCurrentScene sku =
-    (
-        local skuNode = getNodeByName sku exact:true
-        if skuNode == undefined then
+        if rc == undefined then
         (
-            format "[INFO] SKU not in this scene, skipped: %\n" sku
-            return #(0,0)
+            logLine "ERROR: 3dsmaxcmd launch failed (DOSCommand undefined)."
+            return false
         )
 
-        local sizeGroup = findSizeGroupForSku sku
-        if sizeGroup == undefined then
-        (
-            format "[WARN] No size group mapping for SKU, skipped: %\n" sku
-            return #(0,0)
-        )
-
-        local cams = findCameraListForSizeGroup sizeGroup
-        if cams == undefined or cams.count == 0 then
-        (
-            format "[WARN] No camera list for size group '%', SKU skipped: %\n" sizeGroup sku
-            return #(0,0)
-        )
-
-        local targetNodes = collectTargetNodesForSku skuNode
-        local totalRenders = 0
-        local finishCount = 0
-
-        for f in IPS_Finishes do
-        (
-            local finishCode = f[1]
-            local matName = f[2]
-            local quartzMat = getMaterialFromQuartzLibrary matName
-            if quartzMat == undefined then
-            (
-                format "[WARN] Missing material for SKU % finish %: %\n" sku finishCode matName
-                continue
-            )
-
-            if assignQuartzToTargetNodes targetNodes quartzMat sku finishCode then
-            (
-                finishCount += 1
-                totalRenders += renderSkuForFinish sku finishCode cams
-            )
-        )
-
-        #(totalRenders, finishCount)
+        (rc == 0 or rc == true)
     )
 
     fn collectMaxFilesRecursive rootPath outArr =
     (
-        local root = ensureTrailingBackslash rootPath
+        local root = rootPath
+        if (substring root root.count 1) != "\\" do root += "\\"
         if not (doesDirectoryExist root) then return outArr
 
-        local localFiles = getFiles (root + "*.max")
-        for f in localFiles do append outArr f
-
-        local subDirs = getDirectories (root + "*")
-        for d in subDirs do collectMaxFilesRecursive d outArr
-
+        for f in (getFiles (root + "*.max")) do append outArr f
+        for d in (getDirectories (root + "*")) do collectMaxFilesRecursive d outArr
         outArr
     )
 
@@ -333,102 +286,185 @@
         if p == undefined or p == "" then undefined else p
     )
 
+    fn applyMaterialToSinkHierarchy skuNode matObj =
+    (
+        local nodes = collectHierarchy skuNode
+        for n in nodes where (isValidNode n and isKindOf n GeometryClass) do try (n.material = matObj) catch()
+    )
+
+    fn hideAllSinks =
+    (
+        for o in objects where (isValidNode o and isSinkNodeName o.name) do try (o.isHidden = true) catch()
+    )
+
+    fn showSinkHierarchy skuNode =
+    (
+        local nodes = collectHierarchy skuNode
+        for n in nodes where isValidNode n do try (n.isHidden = false) catch()
+    )
+
     fn processSceneFile scenePath =
     (
-        format "\n=== Opening scene: % ===\n" scenePath
-
+        logLine ("Opening scene: " + scenePath)
         local loaded = false
-        try
-        (
-            loaded = loadMaxFile scenePath useFileUnits:true quiet:true
-        )
-        catch
-        (
-            loaded = false
-        )
-
+        try (loaded = loadMaxFile scenePath useFileUnits:true quiet:true) catch (loaded = false)
         if loaded != true then
         (
-            format "[WARN] Could not open scene, skipped: %\n" scenePath
+            logLine ("WARN: Could not open scene, skipped: " + scenePath)
             return #(0,0,0)
         )
 
-        local sceneRenders = 0
-        local sceneFinishes = 0
-        local sceneSkuProcessed = 0
+        local sceneSkus = 0
+        local jobsAttempted = 0
+        local jobsSubmitted = 0
 
-        for row in IPS_SkuToSizeGroup do
+        for row in SKU_TO_SIZE do
         (
             local sku = row[1]
-            local result = processSkuInCurrentScene sku
-            if result[2] > 0 do
+            local skuNode = getNodeByExactName sku
+            if skuNode == undefined do continue
+
+            local sizeGroup = findSizeGroup sku
+            local cameraNames = getCamerasForSizeGroup sizeGroup
+            if cameraNames == undefined or cameraNames.count == 0 do continue
+            if not ensureSkuOutputFolder sku do continue
+
+            sceneSkus += 1
+
+            for f in FINISHES do
             (
-                sceneSkuProcessed += 1
-                sceneRenders += result[1]
-                sceneFinishes += result[2]
+                local finishCode = f[1]
+                local matName = f[2]
+                local qMat = loadQuartzMaterialByName matName
+                if qMat == undefined do
+                (
+                    logLine ("WARN: Missing material " + matName + " for " + sku + " " + finishCode)
+                    continue
+                )
+
+                try
+                (
+                    hideAllSinks()
+                    showSinkHierarchy skuNode
+                    applyMaterialToSinkHierarchy skuNode qMat
+                    completeRedraw()
+                ) catch()
+
+                for i = 1 to cameraNames.count do
+                (
+                    local camName = cameraNames[i]
+                    local camNode = getNodeByExactName camName
+                    if camNode == undefined do
+                    (
+                        logLine ("WARN: Missing camera " + camName + " for " + sku)
+                        continue
+                    )
+
+                    local stateName = sceneStateForCamera camName
+                    restoreSceneStateBestEffort stateName
+                    try (viewport.setCamera camNode) catch()
+                    completeRedraw()
+                    sleep (SUBMISSION_STABILIZE_MS / 1000.0)
+
+                    local outputPath = buildOutputFilePath sku finishCode i
+                    local jobName = sku + "_" + finishCode + "_IGR" + (formattedPrint i format:"02d")
+
+                    local tempScenePath = buildTempScenePath (jobName + "_SRC")
+                    if not (saveTempSceneSnapshot tempScenePath) then
+                    (
+                        logLine ("ERROR: Could not save temp scene: " + tempScenePath)
+                        continue
+                    )
+
+                    jobsAttempted += 1
+                    logLine ("Submitting: " + jobName + " | camera=" + camName + " | state=" + stateName)
+                    if submitViaMaxCmd tempScenePath jobName camName outputPath RENDER_WIDTH RENDER_HEIGHT then
+                    (
+                        jobsSubmitted += 1
+                        logLine ("SUBMITTED: " + jobName)
+                    )
+                    else
+                    (
+                        logLine ("ERROR: Submission failed: " + jobName)
+                    )
+                )
             )
         )
 
-        format "[INFO] Scene complete -> SKUs: %, Finishes: %, Renders: %\n" sceneSkuProcessed sceneFinishes sceneRenders
-        #(sceneSkuProcessed, sceneFinishes, sceneRenders)
+        #(sceneSkus, jobsAttempted, jobsSubmitted)
     )
 
-    /* ============================
-       Main
-       ============================ */
-
-    format "\n=== IGR Multi-Scene Quartz Variant Renderer Started ===\n"
-
-    ensureFolderExists IPS_OutputRoot
-
-    local rootFolder = promptForSceneRoot()
-    if rootFolder == undefined then
+    /* =========================
+       MAIN
+       ========================= */
     (
-        messageBox "No folder selected. Script cancelled." title:"IGR Quartz Variant Renderer"
-        format "[INFO] Cancelled: no source root selected.\n"
-        return false
-    )
+        initLog()
+        logLine "----------------------------------------"
+        logLine "IGR Multi-scene Backburner submission started."
+        logLine ("Output root: " + OUTPUT_ROOT)
+        logLine ("Temp scenes: " + TEMP_SCENE_FOLDER)
+        logLine ("Manager: " + BACKBURNER_MANAGER + ":" + (BACKBURNER_PORT as string))
 
-    local sceneFiles = #()
-    collectMaxFilesRecursive rootFolder sceneFiles
-
-    if sceneFiles.count == 0 then
-    (
-        messageBox ("No .max files found under:\n" + rootFolder) title:"IGR Quartz Variant Renderer"
-        format "[WARN] No scene files found under: %\n" rootFolder
-        return false
-    )
-
-    format "[INFO] Found % scene file(s) under: %\n" sceneFiles.count rootFolder
-
-    local totalScenesProcessed = 0
-    local totalSkusProcessed = 0
-    local totalFinishesProcessed = 0
-    local totalRenders = 0
-
-    for scenePath in sceneFiles do
-    (
-        local res = processSceneFile scenePath
-        if (res[1] + res[2] + res[3]) > 0 do
+        if not doesFileExist QUARTZ_MATLIB then
         (
-            totalScenesProcessed += 1
-            totalSkusProcessed += res[1]
-            totalFinishesProcessed += res[2]
-            totalRenders += res[3]
+            logLine "ERROR: Quartz material library not found."
+            return false
         )
+        if not safeMakeDir OUTPUT_ROOT then
+        (
+            logLine "ERROR: Could not access output root."
+            return false
+        )
+        if not ensureTempFolder() then
+        (
+            logLine "ERROR: Could not access temp scene folder."
+            return false
+        )
+
+        local rootFolder = promptForSceneRoot()
+        if rootFolder == undefined then
+        (
+            logLine "Cancelled: no folder selected."
+            messageBox "No folder selected. Script cancelled." title:"IGR Quartz Variant Renderer"
+            return false
+        )
+
+        local sceneFiles = #()
+        collectMaxFilesRecursive rootFolder sceneFiles
+        if sceneFiles.count == 0 then
+        (
+            logLine ("No .max files found under: " + rootFolder)
+            messageBox ("No .max files found under:\n" + rootFolder) title:"IGR Quartz Variant Renderer"
+            return false
+        )
+
+        local totalScenes = 0
+        local totalSkus = 0
+        local totalJobsAttempted = 0
+        local totalJobsSubmitted = 0
+
+        for scn in sceneFiles do
+        (
+            local res = processSceneFile scn
+            totalScenes += 1
+            totalSkus += res[1]
+            totalJobsAttempted += res[2]
+            totalJobsSubmitted += res[3]
+        )
+
+        logLine "----------------------------------------"
+        logLine ("Scenes processed: " + (totalScenes as string))
+        logLine ("SKUs found: " + (totalSkus as string))
+        logLine ("Jobs attempted: " + (totalJobsAttempted as string))
+        logLine ("Jobs submitted: " + (totalJobsSubmitted as string))
+        logLine "IGR Multi-scene Backburner submission finished."
+
+        messageBox (
+            "IGR render submission complete.\n\n" +
+            "Scenes processed: " + (totalScenes as string) + "\n" +
+            "SKUs found: " + (totalSkus as string) + "\n" +
+            "Jobs attempted: " + (totalJobsAttempted as string) + "\n" +
+            "Jobs submitted: " + (totalJobsSubmitted as string)
+        ) title:"IGR Quartz Variant Renderer"
     )
-
-    format "\n=== IGR Multi-Scene Render Completed ===\n"
-    format "[INFO] Source scenes with output: %\n" totalScenesProcessed
-    format "[INFO] SKUs processed: %\n" totalSkusProcessed
-    format "[INFO] Finishes processed: %\n" totalFinishesProcessed
-    format "[INFO] JPG renders saved: %\n" totalRenders
-
-    messageBox (
-        "IGR multi-scene render job complete.\n\n" +
-        "Source scenes with output: " + (totalScenesProcessed as string) + "\n" +
-        "SKUs processed: " + (totalSkusProcessed as string) + "\n" +
-        "Finishes processed: " + (totalFinishesProcessed as string) + "\n" +
-        "JPG renders saved: " + (totalRenders as string)
-    ) title:"IGR Quartz Variant Renderer"
 )
