@@ -20,7 +20,7 @@
     global QUARTZ_MATLIB      = @"R:\Creative\3D Library\3D Library\Material Library\Quartz.mat"
     global RENDER_WIDTH       = 2000
     global RENDER_HEIGHT      = 2000
-    global BACKBURNER_MANAGER = "10.10.0.59"
+    global BACKBURNER_MANAGER = "10.10.0.62"
     global BACKBURNER_PORT    = 3234
     global TEMP_SCENE_FOLDER  = @"R:\Aidan\IGR\_TempScenes"
     global DRY_RUN            = false
@@ -28,9 +28,10 @@
     global JOB_PRIORITY       = 50
     global MAXCMD_EXE         = (getDir #maxroot) + "3dsmaxcmd.exe"
 
-    global IGR_EMPTY_SCENESTATE = "empty"
-    global IGR_SLICE_SCENESTATE = "Slice"
-    global IGR_SLICE_CAMERA     = "Corona Camera 002"
+    global IGR_CAMERA_RENDER_PLAN = #(
+        #("Corona Camera001", "empty"), -- Image 01
+        #("Corona Camera002", "Slice")  -- Image 02
+    )
 
     global FINISHES = #(
         #("WH", "White_Quartz"),
@@ -41,19 +42,13 @@
         #("BI", "Bisque_Quartz_02")
     )
 
-    global SKU_TO_SIZE = #(
-        #("Q-306",      "S"),
-        #("Q-315",      "S"),
-        #("QUWS-875",   "L"),
-        #("QARWS-740",  "M"),
-        #("QAWS-000",   "M"),
-        #("QTWS-000",   "L")
-    )
-
-    global SIZE_TO_CAMERAS = #(
-        #("S", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004")),
-        #("M", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004")),
-        #("L", #("Corona Camera 001", "Corona Camera 002", "Corona Camera 003", "Corona Camera 004"))
+    global SKU_LIST = #(
+        "Q-306",
+        "Q-315",
+        "QUWS-875",
+        "QARWS-740",
+        "QAWS-000",
+        "QTWS-000"
     )
 
     global VALID_SINK_PREFIXES = #( "QARWS", "QAWS", "QUWS", "QTWS", "QAR", "QA", "QU", "QT", "Q" )
@@ -130,18 +125,6 @@
 
     fn getNodeByExactName n = getNodeByName n exact:true ignoreCase:false
 
-    fn findSizeGroup sku =
-    (
-        for row in SKU_TO_SIZE where (toUpper row[1]) == (toUpper sku) do return row[2]
-        undefined
-    )
-
-    fn getCamerasForSizeGroup g =
-    (
-        for row in SIZE_TO_CAMERAS where (toUpper row[1]) == (toUpper g) do return row[2]
-        undefined
-    )
-
     fn loadQuartzMaterialByName matName =
     (
         if not doesFileExist QUARTZ_MATLIB then return undefined
@@ -174,11 +157,6 @@
         if DRY_RUN then return true
         local saved = saveMaxFile tempScenePath clearNeedSaveFlag:true useNewFile:false quiet:true
         if saved then doesFileExist tempScenePath else false
-    )
-
-    fn sceneStateForCamera cameraName =
-    (
-        if (toUpper cameraName) == (toUpper IGR_SLICE_CAMERA) then IGR_SLICE_SCENESTATE else IGR_EMPTY_SCENESTATE
     )
 
     fn restoreSceneStateBestEffort stateName =
@@ -318,15 +296,11 @@
         local jobsAttempted = 0
         local jobsSubmitted = 0
 
-        for row in SKU_TO_SIZE do
+        for sku in SKU_LIST do
         (
-            local sku = row[1]
             local skuNode = getNodeByExactName sku
             if skuNode == undefined do continue
 
-            local sizeGroup = findSizeGroup sku
-            local cameraNames = getCamerasForSizeGroup sizeGroup
-            if cameraNames == undefined or cameraNames.count == 0 do continue
             if not ensureSkuOutputFolder sku do continue
 
             sceneSkus += 1
@@ -350,9 +324,10 @@
                     completeRedraw()
                 ) catch()
 
-                for i = 1 to cameraNames.count do
+                for i = 1 to IGR_CAMERA_RENDER_PLAN.count do
                 (
-                    local camName = cameraNames[i]
+                    local camName = IGR_CAMERA_RENDER_PLAN[i][1]
+                    local stateName = IGR_CAMERA_RENDER_PLAN[i][2]
                     local camNode = getNodeByExactName camName
                     if camNode == undefined do
                     (
@@ -360,7 +335,6 @@
                         continue
                     )
 
-                    local stateName = sceneStateForCamera camName
                     restoreSceneStateBestEffort stateName
                     try (viewport.setCamera camNode) catch()
                     completeRedraw()
