@@ -404,49 +404,53 @@
 
     fn applyQuartzToSlicerOverrides quartzMat =
     (
+        local sliceNode = getNodeByName "Slice_Sink" exact:true ignoreCase:false
+        if sliceNode == undefined then
+        (
+            logLine "WARN: Node 'Slice_Sink' not found; slicer override-cap sync skipped."
+            return 0
+        )
+
         local slicersMatched = 0
         local slicersUpdated = 0
 
-        for o in objects where isValidNode o do
+        for md in sliceNode.modifiers do
         (
-            for md in o.modifiers do
+            local mdName = toLower (md.name as string)
+            local mdClass = toLower ((classOf md) as string)
+            if (findString mdName "slicer") != undefined or (findString mdClass "slicer") != undefined then
             (
-                local mdName = toLower (md.name as string)
-                local mdClass = toLower ((classOf md) as string)
-                if (findString mdName "slicer") != undefined or (findString mdClass "slicer") != undefined then
+                slicersMatched += 1
+                local didSet = false
+
+                -- Enable override switches when present.
+                try (if isProperty md #overrideCapMtlOn do md.overrideCapMtlOn = true) catch()
+                try (if isProperty md #overrideCapMaterialOn do md.overrideCapMaterialOn = true) catch()
+                try (if isProperty md #useOverrideCapMtl do md.useOverrideCapMtl = true) catch()
+
+                -- Try common cap-material slots used by slicer-style modifiers.
+                try (if isProperty md #overrideCapMaterial do (md.overrideCapMaterial = quartzMat; didSet = true)) catch()
+                if not didSet do try (if isProperty md #override_cap_material do (setProperty md #override_cap_material quartzMat; didSet = true)) catch()
+                if not didSet do try (if isProperty md #overrideCapMtl do (md.overrideCapMtl = quartzMat; didSet = true)) catch()
+                if not didSet do try (if isProperty md #overrideMtl do (md.overrideMtl = quartzMat; didSet = true)) catch()
+                if not didSet do try (if isProperty md #capMtl do (md.capMtl = quartzMat; didSet = true)) catch()
+                if not didSet do try (if isProperty md #capMaterial do (md.capMaterial = quartzMat; didSet = true)) catch()
+                if not didSet do try (if isProperty md #slicerCapMtl do (md.slicerCapMtl = quartzMat; didSet = true)) catch()
+
+                if didSet then
                 (
-                    slicersMatched += 1
-                    local didSet = false
-
-                    -- Enable override switches when present.
-                    try (if isProperty md #overrideCapMtlOn do md.overrideCapMtlOn = true) catch()
-                    try (if isProperty md #overrideCapMaterialOn do md.overrideCapMaterialOn = true) catch()
-                    try (if isProperty md #useOverrideCapMtl do md.useOverrideCapMtl = true) catch()
-
-                    -- Try common cap-material slots used by slicer-style modifiers.
-                    try (if isProperty md #overrideCapMaterial do (md.overrideCapMaterial = quartzMat; didSet = true)) catch()
-                    if not didSet do try (if isProperty md #override_cap_material do (setProperty md #override_cap_material quartzMat; didSet = true)) catch()
-                    if not didSet do try (if isProperty md #overrideCapMtl do (md.overrideCapMtl = quartzMat; didSet = true)) catch()
-                    if not didSet do try (if isProperty md #overrideMtl do (md.overrideMtl = quartzMat; didSet = true)) catch()
-                    if not didSet do try (if isProperty md #capMtl do (md.capMtl = quartzMat; didSet = true)) catch()
-                    if not didSet do try (if isProperty md #capMaterial do (md.capMaterial = quartzMat; didSet = true)) catch()
-                    if not didSet do try (if isProperty md #slicerCapMtl do (md.slicerCapMtl = quartzMat; didSet = true)) catch()
-
-                    if didSet then
-                    (
-                        slicersUpdated += 1
-                        logLine ("Slicer override cap synced on node '" + o.name + "', modifier '" + md.name + "' with quartz '" + quartzMat.name + "'.")
-                    )
-                    else
-                    (
-                        logLine ("WARN: Slicer-like modifier found on '" + o.name + "' (" + md.name + ") but no writable cap override property was detected.")
-                    )
+                    slicersUpdated += 1
+                    logLine ("Slicer override cap synced on node 'Slice_Sink', modifier '" + md.name + "' with quartz '" + quartzMat.name + "'.")
+                )
+                else
+                (
+                    logLine ("WARN: Slicer modifier found on 'Slice_Sink' (" + md.name + ") but no writable cap override property was detected.")
                 )
             )
         )
 
         if slicersMatched == 0 then
-            logLine "WARN: No slicer-like modifiers found for override-cap sync."
+            logLine "WARN: No slicer-like modifiers found on 'Slice_Sink' for override-cap sync."
 
         slicersUpdated
     )
