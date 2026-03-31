@@ -370,6 +370,38 @@
         assigned
     )
 
+    fn applyQuartzToOverrideCapMaterial quartzMat =
+    (
+        local matched = 0
+        local updated = 0
+
+        for m in sceneMaterials where (m != undefined and (matchPattern m.name pattern:"*2147026802*" ignoreCase:true)) do
+        (
+            matched += 1
+
+            local didSet = false
+            try (if isProperty m #overrideCapMaterial do (m.overrideCapMaterial = quartzMat; didSet = true)) catch()
+            if not didSet do try (if isProperty m #override_cap_material do (setProperty m #override_cap_material quartzMat; didSet = true)) catch()
+            if not didSet do try (if isProperty m #overrideMtl do (m.overrideMtl = quartzMat; didSet = true)) catch()
+            if not didSet do try (if isProperty m #slicerCapMtl do (m.slicerCapMtl = quartzMat; didSet = true)) catch()
+
+            if didSet then
+            (
+                updated += 1
+                logLine ("Override cap material synced on '" + m.name + "' with quartz '" + quartzMat.name + "'.")
+            )
+            else
+            (
+                logLine ("WARN: Matched '" + m.name + "' but no known override-cap property was writable.")
+            )
+        )
+
+        if matched == 0 then
+            logLine "WARN: No material matched '*2147026802*' for override-cap sync."
+
+        updated
+    )
+
     fn hideAllSinks =
     (
         for o in objects where (isValidNode o and isSinkNodeName o.name) do try (o.isHidden = true) catch()
@@ -421,6 +453,8 @@
                     logLine ("WARN: Missing material " + matName + " for " + sku + " " + finishCode)
                     continue
                 )
+                local capUpdatedCount = applyQuartzToOverrideCapMaterial qMat
+                logLine ("Override-cap materials updated for finish " + finishCode + ": " + (capUpdatedCount as string))
 
                 for i = 1 to IGR_CAMERA_RENDER_PLAN.count do
                 (
