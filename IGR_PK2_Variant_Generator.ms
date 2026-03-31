@@ -133,11 +133,40 @@
         out
     )
 
+    fn collectBasketStrainerNodes =
+    (
+        local out = #()
+        for o in objects where (isValidNode o and (matchPattern (toLower o.name) pattern:"*basket strainer*" ignoreCase:true)) do
+        (
+            local branch = collectHierarchy o
+            for n in branch do
+            (
+                if (findItem out n) == 0 do append out n
+            )
+        )
+        out
+    )
+
     fn selectSkuAndChildren skuNode =
     (
         local nodes = collectHierarchy skuNode
         try (select nodes) catch()
         nodes
+    )
+
+    fn selectBasketStrainersAndChildren =
+    (
+        local nodes = collectBasketStrainerNodes()
+        if nodes.count > 0 do try (selectMore nodes) catch()
+        nodes
+    )
+
+    fn combineUniqueNodes arrA arrB =
+    (
+        local out = #()
+        for n in arrA do if (findItem out n) == 0 do append out n
+        for n in arrB do if (findItem out n) == 0 do append out n
+        out
     )
 
     fn getNodeByExactName n = getNodeByName n exact:true ignoreCase:false
@@ -361,12 +390,17 @@
         local sceneSkus = 0
         local jobsAttempted = 0
         local jobsSubmitted = 0
+        local sceneBasketNodes = collectBasketStrainerNodes()
+        if sceneBasketNodes.count > 0 then
+            logLine ("Detected basket strainer hierarchy node count: " + (sceneBasketNodes.count as string))
+        else
+            logLine "No basket strainer nodes detected in scene."
 
         for sku in SKU_LIST do
         (
             local skuNode = getNodeByExactName sku
             if skuNode == undefined do continue
-            local targetNodes = collectTargetNodesForSku skuNode
+            local targetNodes = combineUniqueNodes (collectTargetNodesForSku skuNode) sceneBasketNodes
 
             if not ensureSkuOutputFolder sku do continue
 
@@ -403,6 +437,8 @@
                     showSinkHierarchy skuNode
                     local selectedNodes = selectSkuAndChildren skuNode
                     if selectedNodes != undefined then logLine ("Selected SKU hierarchy node count: " + (selectedNodes.count as string))
+                    local basketSelected = selectBasketStrainersAndChildren()
+                    if basketSelected.count > 0 then logLine ("Selected basket strainer hierarchy node count: " + (basketSelected.count as string))
                     local assignedCount = applyMaterialToNodes targetNodes qMat
                     logLine ("Applied material '" + matName + "' to " + (assignedCount as string) + " node(s) for " + sku + " before camera " + camName)
 
